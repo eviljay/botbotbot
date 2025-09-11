@@ -1,7 +1,9 @@
-import os, uuid
+
 from fastapi import FastAPI
 from pydantic import BaseModel
-from payments.liqpay_utils import build_data, PUBLIC_KEY  # вже є
+import uuid
+from payments.liqpay_utils import build_data, PUBLIC_KEY
+
 app = FastAPI()
 
 class InvoiceIn(BaseModel):
@@ -21,6 +23,11 @@ def create_invoice(body: InvoiceIn):
         "signature": signature,
         "checkout_url": checkout_url
     }
+
+# 🔁 Додаємо сумісний шлях, який очікує бот
+@app.post("/api/payments/create")
+def create_payment(body: InvoiceIn):
+    return create_invoice(body)
 
 @app.get("/healthz")
 def healthz():
