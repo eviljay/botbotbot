@@ -1,40 +1,31 @@
+import os
+import json
 import base64
 import hashlib
-import json
-import os
+from dotenv import load_dotenv
 
-PUBLIC_KEY = os.getenv("LIQPAY_PUBLIC")
-PRIVATE_KEY = os.getenv("LIQPAY_PRIVATE")
-SANDBOX = int(os.getenv("LIQPAY_SANDBOX", "1"))
-BASE_URL = os.getenv("BASE_URL", "").rstrip("/")
+load_dotenv()
 
-def _b64(data: bytes) -> str:
-    return base64.b64encode(data).decode("utf-8")
+PUBLIC_KEY = os.getenv("LIQPAY_PUBLIC_KEY", "")
+PRIVATE_KEY = os.getenv("LIQPAY_PRIVATE_KEY", "")
+
+def build_data(params: dict) -> str:
+    """
+    Готує base64(data) для LiqPay checkout
+    """
+    data_str = json.dumps(params, separators=(",", ":"), ensure_ascii=False)
+    return base64.b64encode(data_str.encode("utf-8")).decode("utf-8")
 
 def sign(data_b64: str) -> str:
-    """Формує підпис для LiqPay"""
-    raw = (PRIVATE_KEY + data_b64 + PRIVATE_KEY).encode("utf-8")
-    sha1 = hashlib.sha1(raw).digest()
-    return _b64(sha1)
-
-def build_data(order_id: str, amount: float, description: str, currency="UAH", action="pay"):
-    """Формує data і signature для LiqPay checkout"""
-    payload = {
-        "version": 3,
-        "public_key": PUBLIC_KEY,
-        "action": action,
-        "amount": str(amount),
-        "currency": currency,
-        "description": description,
-        "order_id": order_id,
-        "sandbox": SANDBOX,
-        "server_url": f"{BASE_URL}/liqpay/callback",
-        "result_url": f"{BASE_URL}/thanks"
-    }
-    data_b64 = _b64(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
-    signature = sign(data_b64)
-    return data_b64, signature
+    """
+    Підпис = base64( sha1( PRIVATE_KEY + data + PRIVATE_KEY ) )
+    """
+    raw = PRIVATE_KEY + data_b64 + PRIVATE_KEY
+    sha1 = hashlib.sha1(raw.encode("utf-8")).digest()
+    return base64.b64encode(sha1).decode("utf-8")
 
 def verify_signature(data_b64: str, signature: str) -> bool:
-    """Перевіряє, чи співпадає підпис LiqPay"""
+    """
+    Перевірка коректності підпису
+    """
     return signature == sign(data_b64)
