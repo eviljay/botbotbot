@@ -113,6 +113,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{reg_line}\nВаш баланс: {bal} кредитів",
         reply_markup=_main_menu_kb()
     )
+async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"Ваш user_id: {update.effective_user.id}")
 
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -433,11 +435,13 @@ def main():
     app.add_handler(CommandHandler("topup", topup))
     app.add_handler(CommandHandler("backlinks", backlinks))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_text_menu))
-    app.add_handler(CallbackQueryHandler(on_choice))
+      app.add_handler(CallbackQueryHandler(on_admin_cb, pattern="^(admin\\||noop$)"))
+       app.add_handler(CallbackQueryHandler(on_choice))
+app.add_handler(CommandHandler("id", myid))
 
     # адмін
     app.add_handler(CommandHandler("admin", admin_cmd))
-    app.add_handler(CallbackQueryHandler(on_admin_cb, pattern="^(admin\\||noop$)"))
+ 
 
     log.info(
         "Bot started. DFS_BASE=%s BACKEND_BASE=%s CREDIT_PRICE_UAH=%.2f CHARGE_BACKLINKS_UAH=%.2f (= %d credits) ADMIN_IDS=%s",
