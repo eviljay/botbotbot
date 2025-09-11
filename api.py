@@ -17,13 +17,16 @@ import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
-
+import logging
+ 
+logger = logging.getLogger("mybot-api")
+logging.basicConfig(level=logging.INFO)
 # === ENV ==DB_PATH = os.getenv("DB_PATH", "mybot.db")=
 DB_PATH = os.getenv("DB_PATH", "/root/mybot/bot.db")
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 LIQPAY_PUBLIC_KEY = os.environ["LIQPAY_PUBLIC_KEY"]
 LIQPAY_PRIVATE_KEY = os.environ["LIQPAY_PRIVATE_KEY"]
-THANKS_REDIRECT_TELEGRAM = os.getenv("THANKS_REDIRECT_TELEGRAM", "https://t.me/SeoSwissKnife")
+THANKS_REDIRECT_TELEGRAM = os.getenv("THANKS_REDIRECT_TELEGRAM", "https://t.me/SeoSwissKnife_bot")
 CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))  # 1 кредит = CREDIT_PRICE_UAH грн
 
 # === APP ===
@@ -58,7 +61,16 @@ def init_db():
         conn.commit()
 
 init_db()
-
+async def tg_send_message(chat_id: int, text: str):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(url, json={"chat_id": chat_id, "text": text})
+            # Якщо бот ніколи не бачив юзера -> 400 chat not found
+            if r.status_code >= 400:
+                logger.warning("Telegram sendMessage failed: %s | body=%s", r.status_code, r.text)
+    except Exception as e:
+        logger.warning("Telegram sendMessage exception: %s", e)
 # === HELPERS ===
 def liqpay_sign(data_b64: str) -> str:
     # signature = base64( sha1( private_key + data + private_key ) )
@@ -135,7 +147,7 @@ async def liqpay_callback(data: str = Form(None), signature: str = Form(None), r
         raise HTTPException(status_code=400, detail="Bad data payload")
 
     # Лог для дебага
-    app.logger.info("LiqPay callback OK: %s", payload)
+    logger.info("LiqPay callback OK: %s", payload)
 
     # Витягуємо потрібне
     status = payload.get("status")
@@ -152,7 +164,7 @@ async def liqpay_callback(data: str = Form(None), signature: str = Form(None), r
         raise HTTPException(status_code=400, detail="Missing order_id in payload")
     if user_id is None:
         # не зламаємось: зафіксуємо як 0, але краще перевірити логіку створення інвойсу
-        app.logger.error("Callback without valid user_id (info): %r", user_id_raw)
+        logger.error("Callback without valid user_id (info): %r", user_id_raw)
         user_id = 0
 
     credits = calc_credits(amount)
@@ -194,11 +206,11 @@ async def liqpay_callback(data: str = Form(None), signature: str = Form(None), r
 
             conn.commit()
     except sqlite3.IntegrityError as e:
-        app.logger.error("DB error on callback (integrity): %s", e)
+        logger.error("DB error on callback (integrity): %s", e)
         # 409 краще під дублікати ордерів
         raise HTTPException(status_code=409, detail="Payment already recorded or DB integrity error")
     except Exception as e:
-        app.logger.error("DB error on callback: %s", e, exc_info=True)
+        logger.error("DB error on callback: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="DB error")
 
     # Відправляємо повідомлення у бот (якщо user_id валідний)
@@ -216,6 +228,6 @@ async def liqpay_callback(data: str = Form(None), signature: str = Form(None), r
             )
     except Exception as e:
         # не валимо відповідь LiqPay, просто логуємо
-        app.logger.error("Failed to notify user in Telegram: %s", e)
+        logger.error("Failed to notify user in Telegram: %s", e)
 
     return JSONResponse({"ok": True})
