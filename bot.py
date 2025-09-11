@@ -438,7 +438,7 @@ def main():
       app.add_handler(CallbackQueryHandler(on_admin_cb, pattern="^(admin\\||noop$)"))
        app.add_handler(CallbackQueryHandler(on_choice))
 app.add_handler(CommandHandler("id", myid))
-
+ 
     # адмін
     app.add_handler(CommandHandler("admin", admin_cmd))
  
