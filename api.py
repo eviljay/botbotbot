@@ -1,51 +1,75 @@
-import os, json, base64, hashlib
-from fastapi import FastAPI, Form, Request, HTTPException
-from pydantic import BaseModel
+# /root/mybot/api.py
+import json
+import logging
+from typing import Optional
 
-from dotenv import load_dotenv
-load_dotenv()
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
-LIQPAY_PRIVATE = os.getenv("LIQPAY_PRIVATE")
+# беремо перевірку підпису з твого модуля
+from payments.liqpay_utils import verify_signature
 
-app = FastAPI()
+logger = logging.getLogger("mybot-api")
+logging.basicConfig(level=logging.INFO)
 
-def b64(s: bytes) -> str:
-    return base64.b64encode(s).decode("utf-8")
+app = FastAPI(title="MyBot Public API", version="1.0.0")
 
-def liqpay_signature(data_b64: str) -> str:
-    raw = (LIQPAY_PRIVATE + data_b64 + LIQPAY_PRIVATE).encode("utf-8")
-    import hashlib
-    return b64(hashlib.sha1(raw).digest())
 
-def decode_data(data_b64: str) -> dict:
-    raw = base64.b64decode(data_b64)
-    return json.loads(raw)
+@app.get("/thanks", response_class=HTMLResponse)
+async def thanks():
+    # проста сторінка "Дякуємо"
+    return """
+    <!doctype html>
+    <html><head><meta charset="utf-8"><title>Дякуємо</title></head>
+    <body style="font-family: system-ui; text-align:center; padding: 3rem;">
+      <h1>Дякуємо за оплату! ✅</h1>
+      <p>Оплату отримано. Можете повернутися до бота.</p>
+    </body></html>
+    """
+
 
 @app.post("/liqpay/callback")
-async def liqpay_callback(data: str = Form(...), signature: str = Form(...)):
-    # Перевірка підпису
-    expected = liqpay_signature(data)
-    if signature != expected:
-        raise HTTPException(status_code=400, detail="Bad signature")
+async def liqpay_callback(
+    request: Request,
+    data: Optional[str] = Form(None),
+    signature: Optional[str] = Form(None),
+):
+    """
+    LiqPay надсилає POST з полями data (base64) і signature.
+    Ми валідуємо підпис і логуємо payload. Тут же можна робити нарахування кредитів.
+    """
+    # Підтримуємо і JSON-варіант на всякий випадок
+    if data is None or signature is None:
+        try:
+            body = await request.json()
+            data = data or body.get("data")
+            signature = signature or body.get("signature")
+        except Exception:
+            pass
 
-    payload = decode_data(data)
-    # корисні поля: status, order_id, amount, currency, description, transaction_id, paytype ...
-    status = payload.get("status")
-    order_id = payload.get("order_id")
+    if not data or not signature:
+        logger.warning("Callback: missing data or signature")
+        return PlainTextResponse("missing fields", status_code=400)
 
-    # Обробка статусів: success / sandbox / wait_accept / failure / error / reversed …
-    if status in ("success", "sandbox"):
-        # TODO: нарахуй кредити користувачу за order_id,
-        # перевір чи не оброблявся цей order_id раніше (idempotency)
-        # збережи запис у БД / файл-лог
-        pass
-    elif status in ("failure", "error"):
-        # TODO: логування/повідомлення
-        pass
+    # Перевіряємо підпис
+    if not verify_signature(data, signature):
+        logger.warning("Callback: bad signature")
+        return PlainTextResponse("bad signature", status_code=403)
 
-    # LiqPay очікує просто 200 OK. Можеш повернути "ok".
+    # Розпаковуємо payload (base64 → json)
+    try:
+        import base64
+        decoded = base64.b64decode(data).decode("utf-8")
+        payload = json.loads(decoded)
+    except Exception as e:
+        logger.exception("Callback: failed to decode payload")
+        return PlainTextResponse("bad data", status_code=400)
+
+    # Тут робиш idempotency + нарахування кредитів
+    # order_id = payload.get("order_id")
+    # status = payload.get("status")
+    # amount = payload.get("amount")
+    logger.info("LiqPay callback OK: %s", payload)
+
+    # LiqPay очікує 200 OK
     return {"ok": True}
-
-@app.get("/thanks")
-def thanks():
-    return {"message": "Дякуємо! Якщо оплата пройшла, кредити будуть нараховані протягом хвилини."}
