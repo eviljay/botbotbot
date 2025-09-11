@@ -1,62 +1,75 @@
+# /root/mybot/payments_api.py
+import os
 import uuid
-from decimal import Decimal, InvalidOperation
-from typing import Optional, Union
+import logging
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+# наші утиліти LiqPay
+from payments.liqpay_utils import build_data, sign, PUBLIC_KEY
 
-# твій модуль для роботи з LiqPay
-from payments.liqpay_utils import build_data, PUBLIC_KEY
+load_dotenv()
+log = logging.getLogger("payments-api")
+logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="Payments API", version="1.0.0")
+app = FastAPI(title="Payments API (LiqPay)")
 
+# .env
+SERVER_URL = os.getenv("LIQPAY_SERVER_URL", "")   # https://<your-domain>/liqpay/callback
+RESULT_URL = os.getenv("LIQPAY_RESULT_URL", "")   # https://<your-domain>/thanks
 
-# --------- Моделі ---------
-class InvoiceIn(BaseModel):
-    user_id: Union[int, str]
-    amount: Union[str, float, Decimal]
-    description: Optional[str] = "Credits package"
+def make_order_id() -> str:
+    return f"{uuid.uuid4().hex[:12]}"
 
+@app.post("/api/payments/create")
+async def create_payment(req: Request):
+    """
+    Очікує JSON:
+      {
+        "user_id": 244142655,
+        "amount": 100,               # UAH
+        "currency": "UAH",           # опц.
+        "description": "100 UAH topup"  # опц.
+      }
+    Повертає data/signature/checkout_url для LiqPay.
+    """
+    body = await req.json()
 
-# --------- Утиліти ---------
-def _normalize_amount(amount_in) -> Decimal:
-    try:
-        return Decimal(str(amount_in))
-    except (InvalidOperation, ValueError, TypeError):
-        raise HTTPException(status_code=400, detail=f"Invalid amount: {amount_in!r}")
+    user_id = body.get("user_id")
+    if user_id is None:
+        return JSONResponse({"ok": False, "error": "user_id is required"}, status_code=422)
 
+    amount = float(body.get("amount", 100))
+    currency = body.get("currency", "UAH")
+    description = body.get("description", f"{int(amount)} UAH topup")
+    order_id = body.get("order_id") or make_order_id()
 
-def _make_order_id(user_id: Union[int, str]) -> str:
-    return f"{user_id}-{uuid.uuid4().hex[:12]}"
+    params = {
+        "version": 3,
+        "public_key": PUBLIC_KEY,
+        "action": "pay",
+        "amount": amount,
+        "currency": currency,
+        "description": description,
+        "order_id": f"{user_id}-{order_id}",  # зшиваємо з user_id для надійності
+        "result_url": RESULT_URL,
+        "server_url": SERVER_URL,
+        "sandbox": 1,                 # прибрати у проді
+        "info": str(user_id),         # ← обов’язково! щоб прийшов у callback
+    }
 
-
-# --------- Ендпоінти ---------
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
-
-
-@app.post("/api/payments/invoice")
-def create_invoice(body: InvoiceIn):
-    user_id_str = str(body.user_id)
-    amount = _normalize_amount(body.amount)
-    description = body.description or "Credits package"
-
-    order_id = _make_order_id(user_id_str)
-    data_b64, signature = build_data(order_id, float(amount), description)
-
+    data_b64 = build_data(params)
+    signature = sign(data_b64)
     checkout_url = f"https://www.liqpay.ua/api/3/checkout?data={data_b64}&signature={signature}"
 
-    return {
-        "order_id": order_id,
+    resp = {
+        "ok": True,
+        "order_id": params["order_id"],
         "public_key": PUBLIC_KEY,
         "data": data_b64,
         "signature": signature,
         "checkout_url": checkout_url,
     }
-
-
-# Аліас для коду бота (щоб не міняти bot.py)
-@app.post("/api/payments/create")
-def create_payment(body: InvoiceIn):
-    return create_invoice(body)
+    log.info("Invoice created: %s", resp["order_id"])
+    return JSONResponse(resp)
