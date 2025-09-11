@@ -46,4 +46,3 @@ def create_payment(body: InvoiceIn):
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
- 
