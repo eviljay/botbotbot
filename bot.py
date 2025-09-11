@@ -427,26 +427,25 @@ async def _on_text_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # публічні
+    # Основні команди
+    app.add_handler(CommandHandler("buy", buy))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("register", register))
     app.add_handler(MessageHandler(filters.CONTACT, on_contact))
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("topup", topup))
     app.add_handler(CommandHandler("backlinks", backlinks))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_text_menu))
-    app.add_handler(CallbackQueryHandler(on_admin_cb, pattern="^(admin\\||noop$)"))
-    app.add_handler(CallbackQueryHandler(on_choice))
-    app.add_handler(CommandHandler("id", myid))
-    # адмін
-    app.add_handler(CommandHandler("admin", admin_cmd))
- 
 
-    log.info(
-        "Bot started. DFS_BASE=%s BACKEND_BASE=%s CREDIT_PRICE_UAH=%.2f CHARGE_BACKLINKS_UAH=%.2f (= %d credits) ADMIN_IDS=%s",
-        DFS_BASE, BACKEND_BASE, CREDIT_PRICE_UAH, CHARGE_BACKLINKS_UAH, CHARGE_BACKLINKS_CREDITS, ADMIN_IDS
-    )
+    # Callback-и
+    app.add_handler(CallbackQueryHandler(on_choice))
+
+    # Адмінка
+    app.add_handler(CommandHandler("admin", admin))
+    app.add_handler(CallbackQueryHandler(on_admin_cb, pattern="^(admin\\||noop$)"))
+
+    log.info("Bot started. DFS_BASE=%s BACKEND_BASE=%s", DFS_BASE, BACKEND_BASE)
     app.run_polling(close_loop=False)
+
 
 if __name__ == "__main__":
     main()
