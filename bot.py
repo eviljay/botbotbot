@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 from httpx import HTTPError, AsyncClient, ConnectError
+from liqpay_utils import make_checkout_url
 
 from dataforseo import DataForSEO
 from dao import init_db, ensure_user, get_balance, charge, get_phone, register_or_update_phone
@@ -33,6 +34,19 @@ TOPUP_OPTIONS = [int(x.strip()) for x in os.getenv("TOPUP_OPTIONS", "100,250,500
 init_db()
 dfs = DataForSEO(DFS_LOGIN, DFS_PASS, DFS_BASE)
 
+async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    # Генеруємо order_id (унікальний)
+    order_id = f"{user_id}-{uuid.uuid4().hex[:12]}"
+    amount = 99.00
+    description = "100 credits package"
+
+    pay_url = make_checkout_url(order_id, amount, description)
+    keyboard = [[InlineKeyboardButton("Оплатити через LiqPay", url=pay_url)]]
+    await update.message.reply_text(
+        f"Пакет: {description}\nСума: {amount} UAH\nOrder: {order_id}",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 # === HELPERS ===
 def _extract_items(resp: dict) -> list[dict]:
     tasks = resp.get("tasks") or []
@@ -300,6 +314,10 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+     
+    app.add_handler(CommandHandler("buy", buy))
+     
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("register", register))
     app.add_handler(MessageHandler(filters.CONTACT, on_contact))
