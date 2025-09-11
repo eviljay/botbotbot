@@ -5,7 +5,8 @@ import csv
 import uuid
 import math
 import logging
-from typing import List
+import sqlite3
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from httpx import AsyncClient, ConnectError, HTTPError
@@ -29,63 +30,52 @@ from telegram.ext import (
     filters,
 )
 
-# Локальні модулі
+# ====== Локальні модулі ======
 from dao import init_db, ensure_user, get_balance, charge, get_phone, register_or_update_phone
 from dataforseo import DataForSEO
 
-# -----------------------------------------------------------------------------
-# ЛОГИ
-# -----------------------------------------------------------------------------
+# ====== Логи ======
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bot")
 
-# -----------------------------------------------------------------------------
-# ENV
-# -----------------------------------------------------------------------------
+# ====== ENV ======
 load_dotenv()
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 DFS_LOGIN = os.environ["DATAFORSEO_LOGIN"]
 DFS_PASS = os.environ["DATAFORSEO_PASSWORD"]
 DFS_BASE = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
-
-# Публічний бекенд (наш FastAPI з /api/payments/*)
 BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8000").rstrip("/")
 
-# Скільки коштує 1 кредит (в грн)
 CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
-# Списання за запит беклінків у гривнях (потім конвертуємо у кредити)
 BACKLINKS_CHARGE_UAH = float(os.getenv("BACKLINKS_CHARGE_UAH", "5"))
-
-# Початковий бонус за реєстрацію (кредитів)
 INITIAL_BONUS = int(os.getenv("INITIAL_BONUS", "10"))
+TOPUP_OPTIONS = [int(x.strip()) for x in os.getenv("TOPUP_OPTIONS", "100,250,500").split(",") if x.strip().isdigit()]
 
-# Варіанти поповнення (в грн)
-TOPUP_OPTIONS = [
-    int(x.strip())
-    for x in os.getenv("TOPUP_OPTIONS", "100,250,500").split(",")
-    if x.strip().isdigit()
-]
+# для адмінки
+ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
+DB_PATH = os.getenv("DB_PATH", "bot.db")  # очікувана БД, яку використовує dao.py
 
-# Скільки показувати записів при "показати 10"
 PREVIEW_COUNT = 10
-# Скільки максимум віддавати у CSV при "всі"
 CSV_MAX = 1000
 
-# -----------------------------------------------------------------------------
-# ІНІТ
-# -----------------------------------------------------------------------------
+# ====== INIT ======
 init_db()
 dfs = DataForSEO(DFS_LOGIN, DFS_PASS, DFS_BASE)
 
-# -----------------------------------------------------------------------------
-# УТИЛІТИ
-# -----------------------------------------------------------------------------
-def main_menu_keyboard() -> ReplyKeyboardMarkup:
-    rows = [
-        [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
-        [KeyboardButton("📊 Баланс"), KeyboardButton("📱 Реєстрація")],
-    ]
+# ====== Утиліти ======
+def main_menu_keyboard(registered: bool) -> ReplyKeyboardMarkup:
+    """Якщо юзер зареєстрований — без кнопки реєстрації."""
+    if registered:
+        rows = [
+            [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
+            [KeyboardButton("📊 Баланс")],
+        ]
+    else:
+        rows = [
+            [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
+            [KeyboardButton("📊 Баланс"), KeyboardButton("📱 Реєстрація")],
+        ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def _extract_items(resp: dict) -> List[dict]:
@@ -126,18 +116,18 @@ def _items_to_csv_bytes(items: List[dict]) -> bytes:
     return buf.getvalue().encode()
 
 def _uah_to_credits(amount_uah: float) -> int:
-    # округляємо вгору, щоб не було “півкредиту”
     return max(1, math.ceil(amount_uah / CREDIT_PRICE_UAH))
 
-# -----------------------------------------------------------------------------
-# /start
-# -----------------------------------------------------------------------------
+def _registered(uid: int) -> bool:
+    return bool(get_phone(uid))
+
+# ====== /start ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     ensure_user(uid)
     bal = get_balance(uid)
-    phone = get_phone(uid)
-    reg = "✅ телефон додано" if phone else "❌ немає телефону (використайте Реєстрація)"
+    reg = _registered(uid)
+    reg_text = "✅ телефон додано" if reg else "❌ немає телефону (використайте Реєстрація)"
 
     text = (
         "Привіт! Я SEO-бот з балансом.\n\n"
@@ -146,14 +136,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💳 Поповнити — оплата через LiqPay\n"
         "📊 Баланс — показати ваш баланс\n"
         "📱 Реєстрація — додати телефон (новим — бонус)\n\n"
-        f"Статус реєстрації: {reg}\n"
+        f"Статус реєстрації: {reg_text}\n"
         f"Ваш баланс: {bal} кредитів"
     )
-    await update.message.reply_text(text, reply_markup=main_menu_keyboard())
+    await update.message.reply_text(text, reply_markup=main_menu_keyboard(reg))
 
-# -----------------------------------------------------------------------------
-# Реєстрація (ConversationHandler)
-# -----------------------------------------------------------------------------
+# ====== Реєстрація (ConversationHandler) ======
 WAIT_PHONE = 10
 
 def _normalize_phone(p: str) -> str:
@@ -163,6 +151,10 @@ def _normalize_phone(p: str) -> str:
 async def register_cmd_or_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     ensure_user(uid)
+
+    if _registered(uid):
+        return await update.message.reply_text("Ви вже зареєстровані ✅", reply_markup=main_menu_keyboard(True))
+
     kb = [[KeyboardButton("📱 Поділитись номером", request_contact=True)]]
     await update.message.reply_text(
         "Натисніть кнопку, щоб поділитися **своїм** номером телефону:",
@@ -173,18 +165,10 @@ async def register_cmd_or_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 async def on_contact_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     contact = update.message.contact
-    if not contact:
+    if not contact or (contact.user_id and contact.user_id != uid):
         kb = [[KeyboardButton("📱 Поділитись номером", request_contact=True)]]
         await update.message.reply_text(
-            "Будь ласка, надішліть **контакт** кнопкою нижче.",
-            reply_markup=ReplyKeyboardMarkup(kb, one_time_keyboard=True, resize_keyboard=True),
-        )
-        return WAIT_PHONE
-
-    if contact.user_id and contact.user_id != uid:
-        kb = [[KeyboardButton("📱 Поділитись номером", request_contact=True)]]
-        await update.message.reply_text(
-            "Здається, це не ваш номер. Спробуйте ще раз.",
+            "Будь ласка, поділіться **власним** контактом.",
             reply_markup=ReplyKeyboardMarkup(kb, one_time_keyboard=True, resize_keyboard=True),
         )
         return WAIT_PHONE
@@ -198,27 +182,23 @@ async def on_contact_register(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         msg = f"✅ Телефон збережено.\nВаш баланс: {bal}"
 
-    await update.message.reply_text(msg, reply_markup=main_menu_keyboard())
+    # Повертаємо головне меню БЕЗ кнопки “Реєстрація”
+    await update.message.reply_text(msg, reply_markup=main_menu_keyboard(True))
     return ConversationHandler.END
 
 async def cancel_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Скасовано.", reply_markup=main_menu_keyboard())
+    await update.message.reply_text("Скасовано.", reply_markup=main_menu_keyboard(_registered(update.effective_user.id)))
     return ConversationHandler.END
 
-# -----------------------------------------------------------------------------
-# Баланс
-# -----------------------------------------------------------------------------
+# ====== Баланс ======
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     ensure_user(uid)
     bal = get_balance(uid)
-    phone = get_phone(uid)
-    reg = "✅ телефон додано" if phone else "❌ немає телефону (використайте Реєстрація)"
-    await update.message.reply_text(f"Баланс: {bal} кредитів\nРеєстрація: {reg}")
+    reg_text = "✅ телефон додано" if _registered(uid) else "❌ немає телефону (використайте Реєстрація)"
+    await update.message.reply_text(f"Баланс: {bal} кредитів\nРеєстрація: {reg_text}")
 
-# -----------------------------------------------------------------------------
-# Поповнення
-# -----------------------------------------------------------------------------
+# ====== Поповнення ======
 async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     ensure_user(uid)
@@ -230,9 +210,7 @@ async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("Оберіть суму поповнення:", reply_markup=InlineKeyboardMarkup(rows))
 
-# -----------------------------------------------------------------------------
-# Backlinks
-# -----------------------------------------------------------------------------
+# ====== Backlinks ======
 async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = update.message.text.split()[1:]
     if not args:
@@ -255,9 +233,7 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-# -----------------------------------------------------------------------------
-# CALLBACKS
-# -----------------------------------------------------------------------------
+# ====== CALLBACKS (topup & backlinks) ======
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -271,7 +247,6 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             return await query.edit_message_text("Невірна сума.")
 
-        # Створюємо інвойс у бекенді
         try:
             async with AsyncClient(timeout=20) as c:
                 r = await c.post(f"{BACKEND_BASE}/api/payments/create", json={"user_id": uid, "amount": amount_uah})
@@ -296,12 +271,9 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await query.edit_message_text("Невірний запит.")
     action, domain, scope = data
 
-    # Конвертуємо 5 грн у кредити
     need_credits = _uah_to_credits(BACKLINKS_CHARGE_UAH)
 
-    # Списання
     if not charge(uid, need_credits, domain, scope):
-        # Пропонуємо поповнення
         rows = []
         for amount in TOPUP_OPTIONS:
             credits = int(amount // CREDIT_PRICE_UAH)
@@ -311,7 +283,6 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(rows)
         )
 
-    # Виконуємо запит до DataForSEO
     try:
         limit = PREVIEW_COUNT if scope == "10" else CSV_MAX
         data_resp = await dfs.backlinks_live(domain, limit=limit, order_by="first_seen,desc")
@@ -345,11 +316,10 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.exception("Unexpected error")
         await query.edit_message_text(f"Помилка: {e}")
 
-# -----------------------------------------------------------------------------
-# Обробка натискань по меню (reply keyboard)
-# -----------------------------------------------------------------------------
+# ====== Обробка натискань по меню (reply keyboard) ======
 async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
+    uid = update.effective_user.id
 
     if text == "🔗 Backlinks":
         return await update.message.reply_text("Введіть команду у форматі: /backlinks yourdomain.com")
@@ -358,12 +328,80 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "📊 Баланс":
         return await balance(update, context)
     if text == "📱 Реєстрація":
-        # запуск розмови /register через entry_point
+        if _registered(uid):
+            return await update.message.reply_text("Ви вже зареєстровані ✅", reply_markup=main_menu_keyboard(True))
         return await register_cmd_or_menu(update, context)
 
-# -----------------------------------------------------------------------------
-# MAIN
-# -----------------------------------------------------------------------------
+# ====== АДМІНКА ======
+PAGE_SIZE = 20
+
+def _db() -> sqlite3.Connection:
+    return sqlite3.connect(DB_PATH)
+
+def _admin_check(uid: int) -> bool:
+    return uid in ADMIN_IDS
+
+def _render_users_page(page: int) -> str:
+    offset = (page - 1) * PAGE_SIZE
+    with _db() as conn:
+        cur = conn.execute("SELECT COUNT(*) FROM users")
+        total = cur.fetchone()[0]
+        cur = conn.execute(
+            "SELECT user_id, balance, COALESCE(phone,'') FROM users ORDER BY user_id LIMIT ? OFFSET ?",
+            (PAGE_SIZE, offset),
+        )
+        rows = cur.fetchall()
+
+    if total == 0:
+        return "Користувачів ще немає."
+
+    lines = [f"👤 Користувачі (всього: {total}) | сторінка {page}"]
+    for uid, bal, phone in rows:
+        phone_disp = phone if phone else "—"
+        lines.append(f"• {uid}: баланс {bal}, телефон {phone_disp}")
+    return "\n".join(lines)
+
+def _admin_kb(page: int, total: int) -> InlineKeyboardMarkup:
+    max_page = max(1, math.ceil(total / PAGE_SIZE))
+    buttons = []
+    with _db() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    if page > 1:
+        buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"admin|page|{page-1}"))
+    if page < max_page:
+        buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"admin|page|{page+1}"))
+    if not buttons:
+        buttons = [InlineKeyboardButton("↻ Оновити", callback_data=f"admin|page|{page}")]
+    return InlineKeyboardMarkup([buttons])
+
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not _admin_check(uid):
+        return await update.message.reply_text("⛔️ Доступ заборонено.")
+    text = _render_users_page(1)
+    with _db() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    await update.message.reply_text(text, reply_markup=_admin_kb(1, total))
+
+async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = update.effective_user.id
+    if not _admin_check(uid):
+        return await query.edit_message_text("⛔️ Доступ заборонено.")
+
+    parts = (query.data or "").split("|")
+    if len(parts) == 3 and parts[0] == "admin" and parts[1] == "page":
+        try:
+            page = max(1, int(parts[2]))
+        except Exception:
+            page = 1
+        text = _render_users_page(page)
+        with _db() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        return await query.edit_message_text(text, reply_markup=_admin_kb(page, total))
+
+# ====== MAIN ======
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
@@ -373,24 +411,26 @@ def main():
     app.add_handler(CommandHandler("topup", topup))
     app.add_handler(CommandHandler("backlinks", backlinks))
 
-    # Реєстрація як розмова — важливо додати РАНІШЕ за загальні text-хендлери
+    # Реєстрація — розмова
     reg_conv = ConversationHandler(
         entry_points=[
             CommandHandler("register", register_cmd_or_menu),
             MessageHandler(filters.Regex(r"^📱 Реєстрація$"), register_cmd_or_menu),
         ],
-        states={
-            WAIT_PHONE: [MessageHandler(filters.CONTACT, on_contact_register)],
-        },
+        states={WAIT_PHONE: [MessageHandler(filters.CONTACT, on_contact_register)]},
         fallbacks=[CommandHandler("cancel", cancel_register)],
         allow_reentry=True,
     )
     app.add_handler(reg_conv)
 
-    # Callback’и
+    # Адмінка
+    app.add_handler(CommandHandler("admin", admin_cmd))
+    app.add_handler(CallbackQueryHandler(on_admin_cb, pattern=r"^admin\|"))
+
+    # Callback’и (topup/backlinks)
     app.add_handler(CallbackQueryHandler(on_choice))
 
-    # Керування меню (reply keyboard)
+    # Меню-тексти
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_menu_text))
 
     log.info("Bot started. DFS_BASE=%s BACKEND_BASE=%s", DFS_BASE, BACKEND_BASE)
