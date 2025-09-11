@@ -5,6 +5,7 @@ import sqlite3
 import threading
 from typing import Optional, Tuple
 
+
 DB_PATH = os.getenv("DB_PATH", "./data/bot.db")
 _lock = threading.Lock()
 
@@ -40,7 +41,24 @@ SCHEMA = [
     );
     """
 ]
-
+# dao.py — додай поруч з іншими функціями
+def add_credits(user_id: int, credits: int) -> int:
+    """
+    Додає користувачу credits і повертає новий баланс.
+    """
+    ensure_user(user_id)
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH)  # використовуй той самий DB_PATH, що й інші функції
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET balance = COALESCE(balance, 0) + ? WHERE user_id = ?", (int(credits), int(user_id)))
+        conn.commit()
+        # повертаємо оновлений баланс
+        row = cur.execute("SELECT balance FROM users WHERE user_id = ?", (int(user_id),)).fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+        
 def _ensure_dir() -> None:
     d = os.path.dirname(DB_PATH) or "."
     os.makedirs(d, exist_ok=True)
