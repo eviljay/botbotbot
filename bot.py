@@ -435,10 +435,9 @@ def main():
     app.add_handler(CommandHandler("topup", topup))
     app.add_handler(CommandHandler("backlinks", backlinks))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_text_menu))
-      app.add_handler(CallbackQueryHandler(on_admin_cb, pattern="^(admin\\||noop$)"))
-       app.add_handler(CallbackQueryHandler(on_choice))
-app.add_handler(CommandHandler("id", myid))
- 
+    app.add_handler(CallbackQueryHandler(on_admin_cb, pattern="^(admin\\||noop$)"))
+    app.add_handler(CallbackQueryHandler(on_choice))
+    app.add_handler(CommandHandler("id", myid))
     # адмін
     app.add_handler(CommandHandler("admin", admin_cmd))
  
