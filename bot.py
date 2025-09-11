@@ -16,7 +16,7 @@ from telegram.ext import (
     ContextTypes, filters,
 )
 
-# --- локальні модулі (як у твоєму проекті)
+# --- локальні модулі вашого проєкту
 from dao import init_db, ensure_user, get_balance, charge, get_phone, register_or_update_phone
 from dataforseo import DataForSEO
 
@@ -93,6 +93,18 @@ def _topup_keyboard() -> InlineKeyboardMarkup:
         ])
     return InlineKeyboardMarkup(rows)
 
+def _main_menu_kb() -> ReplyKeyboardMarkup:
+    # «фізична» клавіатура знизу
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("/backlinks"), KeyboardButton("/topup")],
+            [KeyboardButton("/balance"),   KeyboardButton("/register")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        selective=False,
+    )
+
 # -------------------- HANDLERS ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -107,17 +119,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/backlinks <домен> — вибір 10/всі + перегляд/CSV (списання кредитів)\n"
         "/balance — показати баланс\n"
         "/topup — поповнити баланс через LiqPay\n\n"
-        f"{reg_line}\nВаш баланс: {bal} кредитів\n\n"
-        "Обери пакет нижче 👇"
+        f"{reg_line}\nВаш баланс: {bal} кредитів"
     )
-    kb = _topup_keyboard()
+    # Показуємо лише «фізичні» кнопки-меню, без інлайн-пакетів на старті
+    kb = _main_menu_kb()
     if update.message:
         await update.message.reply_text(text, reply_markup=kb)
     else:
         await update.effective_chat.send_message(text, reply_markup=kb)
 
+async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Меню:", reply_markup=_main_menu_kb())
+
 async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # дубль кнопок на випадок, якщо треба швидкий виклик
+    # Просто дубль /start (кнопки меню)
     await start(update, context)
 
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -145,7 +160,7 @@ async def on_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt = f"✅ Дякуємо за реєстрацію! Нараховано бонус: +{credited} кредитів.\nВаш баланс: {bal}"
     else:
         txt = f"✅ Телефон збережено. Ваш баланс: {bal}"
-    await update.message.reply_text(txt, reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text(txt, reply_markup=_main_menu_kb())
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -153,7 +168,7 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = get_balance(uid)
     phone = get_phone(uid)
     reg_line = "✅ телефон додано" if phone else "❌ немає телефону (використайте /register)"
-    await update.message.reply_text(f"Баланс: {bal} кредитів\nРеєстрація: {reg_line}")
+    await update.message.reply_text(f"Баланс: {bal} кредитів\nРеєстрація: {reg_line}", reply_markup=_main_menu_kb())
 
 async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -163,7 +178,7 @@ async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = update.message.text.split()[1:]
     if not args:
-        return await update.message.reply_text("Приклад: /backlinks yourdomain.com")
+        return await update.message.reply_text("Приклад: /backlinks yourdomain.com", reply_markup=_main_menu_kb())
     domain = args[0]
     kb = [
         [
@@ -208,9 +223,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 r = await c.post(f"{BACKEND_BASE}/api/payments/create", json=payload)
             if r.status_code != 200:
                 log.error("Payments API %s: %s", r.status_code, r.text)
-                return await query.edit_message_text(
-                    "❌ Бекенд недоступний або повернув помилку. Спробуйте пізніше."
-                )
+                return await query.edit_message_text("❌ Бекенд недоступний або повернув помилку. Спробуйте пізніше.")
             resp = r.json()
             url = resp.get("checkout_url")
             if not url:
@@ -238,7 +251,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cost = PRICE_10 if scope == "10" else PRICE_ALL
     if not charge(uid, cost, domain, scope):
-        # не вистачає кредитів — показуємо ті ж кнопки поповнення
+        # не вистачає кредитів — показуємо кнопки поповнення
         return await query.edit_message_text(
             f"Недостатньо кредитів (потрібно {cost}). Поповніть баланс.",
             reply_markup=_topup_keyboard()
@@ -277,13 +290,14 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("buy", buy))          # дубль кнопок
+    app.add_handler(CommandHandler("menu", menu_cmd))      # повернути «фізичні» кнопки
+    app.add_handler(CommandHandler("buy", buy))            # дубль меню
     app.add_handler(CommandHandler("register", register))
     app.add_handler(MessageHandler(filters.CONTACT, on_contact))
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("topup", topup))
     app.add_handler(CommandHandler("backlinks", backlinks))
-    app.add_handler(CallbackQueryHandler(on_choice))     # без pattern — ловимо всі натискання
+    app.add_handler(CallbackQueryHandler(on_choice))       # ловимо всі натискання
 
     log.info("Bot started. DFS_BASE=%s BACKEND_BASE=%s", DFS_BASE, BACKEND_BASE)
     app.run_polling(close_loop=False)
