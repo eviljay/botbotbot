@@ -18,7 +18,6 @@ from telegram import (
     InlineKeyboardButton,
     KeyboardButton,
     ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -54,7 +53,7 @@ TOPUP_OPTIONS = [int(x.strip()) for x in os.getenv("TOPUP_OPTIONS", "100,250,500
 
 # для адмінки
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
-DB_PATH = os.getenv("DB_PATH", "bot.db")  # очікувана БД, яку використовує dao.py
+DB_PATH = os.getenv("DB_PATH", "bot.db")
 
 PREVIEW_COUNT = 10
 CSV_MAX = 1000
@@ -65,7 +64,6 @@ dfs = DataForSEO(DFS_LOGIN, DFS_PASS, DFS_BASE)
 
 # ====== Утиліти ======
 def main_menu_keyboard(registered: bool) -> ReplyKeyboardMarkup:
-    """Якщо юзер зареєстрований — без кнопки реєстрації."""
     if registered:
         rows = [
             [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
@@ -133,7 +131,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Привіт! Я SEO-бот з балансом.\n\n"
         "Команди/меню:\n"
         "🔗 Backlinks — отримати останні або всі беклінки й CSV\n"
-        "💳 Поповнити — оплата через Portmone\n"
+        "💳 Поповнити — оплата через WayForPay або LiqPay\n"
         "📊 Баланс — показати ваш баланс\n"
         "📱 Реєстрація — додати телефон (новим — бонус)\n\n"
         f"Статус реєстрації: {reg_text}\n"
@@ -141,7 +139,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, reply_markup=main_menu_keyboard(reg))
 
-# ====== Реєстрація (ConversationHandler) ======
+# ====== Реєстрація ======
 WAIT_PHONE = 10
 
 def _normalize_phone(p: str) -> str:
@@ -182,7 +180,6 @@ async def on_contact_register(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         msg = f"✅ Телефон збережено.\nВаш баланс: {bal}"
 
-    # Повертаємо головне меню БЕЗ кнопки “Реєстрація”
     await update.message.reply_text(msg, reply_markup=main_menu_keyboard(True))
     return ConversationHandler.END
 
@@ -233,101 +230,122 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-# ====== CALLBACKS (topup & backlinks) ======
+# ====== CALLBACKS (topup & backlinks & admin) ======
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
     data = (query.data or "").split("|")
 
-    # --- Поповнення ---
-    if data[0] == "topup":
+    # 1) Обрали суму -> показати вибір провайдера
+    if data[0] == "topup" and len(data) == 2:
         try:
             amount_uah = int(data[1])
         except Exception:
             return await query.edit_message_text("Невірна сума.")
-
-        # Викликаємо твій бекенд, який тепер повертає Portmone-посилання
-        try:
-            async with AsyncClient(timeout=20) as c:
-                r = await c.post(
-                    f"{BACKEND_BASE}/api/payments/create",
-                    json={"user_id": uid, "amount": amount_uah, "description": f"Top-up {amount_uah} by {uid}"},
-                )
-                r.raise_for_status()
-                resp = r.json()
-        except ConnectError:
-            return await query.edit_message_text("❌ Бекенд недоступний. Перевір BACKEND_BASE і mybot-api (порт 8000).")
-        except HTTPError as e:
-            return await query.edit_message_text(f"Помилка створення платежу: {e}")
-
-        # Очікуємо універсальний формат з бекенда:
-        # { "ok": true, "order_id": "...", "payment_url": "https://..." }
-        if not isinstance(resp, dict) or not resp.get("ok"):
-            return await query.edit_message_text(f"Створення платежу неуспішне: {resp}")
-
-        pay_url = resp.get("payment_url") or resp.get("invoiceUrl")  # на всякий — сумісність зі старим LiqPay
-        order_id = resp.get("order_id") or "—"
-        if not pay_url:
-            return await query.edit_message_text("Не отримав посилання на оплату.")
-
-        kb = [[InlineKeyboardButton("💳 Оплатити (Portmone)", url=pay_url)]]
+        kb = [
+            [
+                InlineKeyboardButton("🔵 WayForPay", callback_data=f"pay|wayforpay|{amount_uah}"),
+                InlineKeyboardButton("🟢 LiqPay", callback_data=f"pay|liqpay|{amount_uah}"),
+            ],
+            [InlineKeyboardButton("⬅️ Змінити суму", callback_data="back|topup")],
+        ]
         return await query.edit_message_text(
-            f"Замовлення: {order_id}\nРахунок створено на {amount_uah}₴. Натисніть, щоб оплатити:",
+            f"Сума: {amount_uah}₴\nОберіть платіжну систему:",
             reply_markup=InlineKeyboardMarkup(kb)
         )
 
-    # --- Платні дії (backlinks) ---
-    if len(data) != 3:
-        return await query.edit_message_text("Невірний запит.")
-    action, domain, scope = data
-
-    need_credits = _uah_to_credits(BACKLINKS_CHARGE_UAH)
-
-    if not charge(uid, need_credits, domain, scope):
+    # 2) Повернутися до сум
+    if data[0] == "back" and data[1] == "topup":
         rows = []
         for amount in TOPUP_OPTIONS:
             credits = int(amount // CREDIT_PRICE_UAH)
             rows.append([InlineKeyboardButton(f"💳 Поповнити {amount}₴ (~{credits} кредитів)", callback_data=f"topup|{amount}")])
+        return await query.edit_message_text("Оберіть суму поповнення:", reply_markup=InlineKeyboardMarkup(rows))
+
+    # 3) Обрали провайдера -> створюємо платіж
+    if data[0] == "pay" and len(data) == 3:
+        provider = data[1]
+        try:
+            amount_uah = int(data[2])
+        except Exception:
+            return await query.edit_message_text("Невірна сума.")
+
+        try:
+            async with AsyncClient(timeout=20) as c:
+                r = await c.post(
+                    f"{BACKEND_BASE}/api/payments/create",
+                    json={"user_id": uid, "amount": amount_uah, "description": f"Top-up {amount_uah} by {uid}", "provider": provider},
+                )
+                r.raise_for_status()
+                resp = r.json()
+        except ConnectError:
+            return await query.edit_message_text("❌ Бекенд недоступний. Перевір BACKEND_BASE і порт 8000.")
+        except HTTPError as e:
+            return await query.edit_message_text(f"Помилка створення платежу: {e}")
+
+        if not isinstance(resp, dict) or not resp.get("ok"):
+            return await query.edit_message_text(f"Створення платежу неуспішне: {resp}")
+
+        pay_url = resp.get("pay_url") or resp.get("invoiceUrl") or resp.get("payment_url")
+        order_id = resp.get("order_id") or "—"
+        if not pay_url:
+            return await query.edit_message_text("Не отримав посилання на оплату.")
+
+        label = "WayForPay" if provider == "wayforpay" else "LiqPay"
+        kb = [[InlineKeyboardButton(f"💳 Оплатити ({label})", url=pay_url)]]
         return await query.edit_message_text(
-            f"Недостатньо кредитів (потрібно {need_credits}). Поповніть баланс.",
-            reply_markup=InlineKeyboardMarkup(rows)
+            f"Замовлення: {order_id}\nРахунок на {amount_uah}₴ створено. Натисніть, щоб оплатити:",
+            reply_markup=InlineKeyboardMarkup(kb)
         )
 
-    try:
-        limit = PREVIEW_COUNT if scope == "10" else CSV_MAX
-        data_resp = await dfs.backlinks_live(domain, limit=limit, order_by="first_seen,desc")
-        items = _extract_items(data_resp)
-        if not items:
-            bal_now = get_balance(uid)
-            return await query.edit_message_text(f"Нічого не знайшов 😕\nВаш новий баланс: {bal_now} кредитів")
+    # --- нижче — ваша існуюча логіка беклінків ---
+    if len(data) == 3 and data[0] in {"show", "csv"}:
+        action, domain, scope = data
+        need_credits = _uah_to_credits(BACKLINKS_CHARGE_UAH)
 
-        if action == "show":
-            cap = PREVIEW_COUNT if scope == "10" else min(50, len(items))
-            txt = _fmt_preview(items, cap)
-            bal_now = get_balance(uid)
-            if scope == "all" and len(items) > cap:
-                txt += f"\n\n…показано перші {cap} з {len(items)}."
-            txt += f"\n\n💰 Списано {need_credits} кредит(и). Новий баланс: {bal_now}"
-            await query.edit_message_text(txt)
-        elif action == "csv":
-            csv_bytes = _items_to_csv_bytes(items)
-            bal_now = get_balance(uid)
-            await query.message.reply_document(
-                document=InputFile(io.BytesIO(csv_bytes), filename=f"{domain}_backlinks_{scope}.csv"),
-                caption=f"Експорт для {domain} ({'10' if scope=='10' else 'all'})\n💰 Списано {need_credits}. Новий баланс: {bal_now}"
+        if not charge(uid, need_credits, domain, scope):
+            rows = []
+            for amount in TOPUP_OPTIONS:
+                credits = int(amount // CREDIT_PRICE_UAH)
+                rows.append([InlineKeyboardButton(f"💳 Поповнити {amount}₴ (~{credits} кредитів)", callback_data=f"topup|{amount}")])
+            return await query.edit_message_text(
+                f"Недостатньо кредитів (потрібно {need_credits}). Поповніть баланс.",
+                reply_markup=InlineKeyboardMarkup(rows)
             )
-            await query.edit_message_text("Готово ✅")
-        else:
-            await query.edit_message_text("Невідома дія.")
-    except HTTPError as e:
-        log.exception("HTTP error")
-        await query.edit_message_text(f"DataForSEO HTTP error: {e}")
-    except Exception as e:
-        log.exception("Unexpected error")
-        await query.edit_message_text(f"Помилка: {e}")
 
-# ====== Обробка натискань по меню (reply keyboard) ======
+        try:
+            limit = PREVIEW_COUNT if scope == "10" else CSV_MAX
+            data_resp = await dfs.backlinks_live(domain, limit=limit, order_by="first_seen,desc")
+            items = _extract_items(data_resp)
+            if not items:
+                bal_now = get_balance(uid)
+                return await query.edit_message_text(f"Нічого не знайшов 😕\nВаш новий баланс: {bal_now} кредитів")
+
+            if action == "show":
+                cap = PREVIEW_COUNT if scope == "10" else min(50, len(items))
+                txt = _fmt_preview(items, cap)
+                bal_now = get_balance(uid)
+                if scope == "all" and len(items) > cap:
+                    txt += f"\n\n…показано перші {cap} з {len(items)}."
+                txt += f"\n\n💰 Списано {need_credits} кредит(и). Новий баланс: {bal_now}"
+                await query.edit_message_text(txt)
+            else:
+                csv_bytes = _items_to_csv_bytes(items)
+                bal_now = get_balance(uid)
+                await query.message.reply_document(
+                    document=InputFile(io.BytesIO(csv_bytes), filename=f"{domain}_backlinks_{scope}.csv"),
+                    caption=f"Експорт для {domain} ({'10' if scope=='10' else 'all'})\n💰 Списано {need_credits}. Новий баланс: {bal_now}"
+                )
+                await query.edit_message_text("Готово ✅")
+        except HTTPError as e:
+            log.exception("HTTP error")
+            await query.edit_message_text(f"DataForSEO HTTP error: {e}")
+        except Exception as e:
+            log.exception("Unexpected error")
+            await query.edit_message_text(f"Помилка: {e}")
+
+# ====== Меню-тексти ======
 async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
@@ -343,15 +361,12 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text("Ви вже зареєстровані ✅", reply_markup=main_menu_keyboard(True))
         return await register_cmd_or_menu(update, context)
 
-# ====== АДМІНКА ======
+# ====== Адмінка (як було) ======
 PAGE_SIZE = 20
-
 def _db() -> sqlite3.Connection:
     return sqlite3.connect(DB_PATH)
-
 def _admin_check(uid: int) -> bool:
     return uid in ADMIN_IDS
-
 def _render_users_page(page: int) -> str:
     offset = (page - 1) * PAGE_SIZE
     with _db() as conn:
@@ -362,16 +377,13 @@ def _render_users_page(page: int) -> str:
             (PAGE_SIZE, offset),
         )
         rows = cur.fetchall()
-
     if total == 0:
         return "Користувачів ще немає."
-
     lines = [f"👤 Користувачі (всього: {total}) | сторінка {page}"]
     for uid, bal, phone in rows:
         phone_disp = phone if phone else "—"
         lines.append(f"• {uid}: баланс {bal}, телефон {phone_disp}")
     return "\n".join(lines)
-
 def _admin_kb(page: int, total: int) -> InlineKeyboardMarkup:
     max_page = max(1, math.ceil(total / PAGE_SIZE))
     buttons = []
@@ -384,7 +396,6 @@ def _admin_kb(page: int, total: int) -> InlineKeyboardMarkup:
     if not buttons:
         buttons = [InlineKeyboardButton("↻ Оновити", callback_data=f"admin|page|{page}")]
     return InlineKeyboardMarkup([buttons])
-
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not _admin_check(uid):
@@ -393,14 +404,12 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with _db() as conn:
         total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     await update.message.reply_text(text, reply_markup=_admin_kb(1, total))
-
 async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
     if not _admin_check(uid):
         return await query.edit_message_text("⛔️ Доступ заборонено.")
-
     parts = (query.data or "").split("|")
     if len(parts) == 3 and parts[0] == "admin" and parts[1] == "page":
         try:
@@ -415,35 +424,22 @@ async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====== MAIN ======
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-    # Команди
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("topup", topup))
     app.add_handler(CommandHandler("backlinks", backlinks))
-
-    # Реєстрація — розмова
     reg_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("register", register_cmd_or_menu),
-            MessageHandler(filters.Regex(r"^📱 Реєстрація$"), register_cmd_or_menu),
-        ],
+        entry_points=[CommandHandler("register", register_cmd_or_menu),
+                      MessageHandler(filters.Regex(r"^📱 Реєстрація$"), register_cmd_or_menu)],
         states={WAIT_PHONE: [MessageHandler(filters.CONTACT, on_contact_register)]},
         fallbacks=[CommandHandler("cancel", cancel_register)],
         allow_reentry=True,
     )
     app.add_handler(reg_conv)
-
-    # Адмінка
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(on_admin_cb, pattern=r"^admin\|"))
-
-    # Callback’и (topup/backlinks)
     app.add_handler(CallbackQueryHandler(on_choice))
-
-    # Меню-тексти
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_menu_text))
-
     log.info("Bot started. DFS_BASE=%s BACKEND_BASE=%s", DFS_BASE, BACKEND_BASE)
     app.run_polling(close_loop=False)
 
