@@ -1,12 +1,14 @@
 # payments_api.py
 import os
+import sys
 import json
 import uuid
 import math
 import base64
 import logging
 import sqlite3
-from typing import Optional, Dict, Any
+import inspect
+from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, Form
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -16,6 +18,8 @@ import httpx
 # ===== Логи =====
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("mybot-api")
+
+API_BUILD = "liqpay-v2.1"  # <- маркер версії коду
 
 # ===== ENV =====
 DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "UAH")
@@ -27,15 +31,12 @@ LIQPAY_RESULT_URL = os.getenv("LIQPAY_RESULT_URL", "").strip()        # стор
 LIQPAY_SERVER_URL = os.getenv("LIQPAY_SERVER_URL", "").strip()        # callback URL
 
 # База/бот
-DB_PATH = os.getenv("DB_PATH", "/root/mybot/bot.db")                  # ВАЖЛИВО: абсолютний шлях
+DB_PATH = os.getenv("DB_PATH", "/root/mybot/bot.db")  # ВАЖЛИВО: абсолютний шлях
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
 
-# ===== Імпорт утиліт LiqPay =====
-from payments.liqpay_utils import (
-    build_checkout_link,
-    verify_callback_signature,
-)
+# ===== Утиліти LiqPay =====
+from payments.liqpay_utils import build_checkout_link, verify_callback_signature
 
 # ===== FastAPI =====
 app = FastAPI(title="Payments API (LiqPay)")
@@ -47,7 +48,7 @@ app.add_middleware(
 
 # ===== Допоміжне =====
 def _mk_order_id(user_id: int) -> str:
-    # Префіксуємо order_id user_id’ом, щоб у callback швидко визначати юзера
+    # Префікс з user_id для надійного зв’язування платежу і юзера
     return f"{user_id}-{uuid.uuid4().hex[:12]}"
 
 def _ensure_users_table():
@@ -103,7 +104,12 @@ def ping():
 
 @app.get("/env-check")
 def env_check():
-    return {"DB_PATH": DB_PATH, "CREDIT_PRICE_UAH": CREDIT_PRICE_UAH}
+    return {
+        "API_BUILD": API_BUILD,
+        "DB_PATH": DB_PATH,
+        "CREDIT_PRICE_UAH": CREDIT_PRICE_UAH,
+        "PAYMENTS_API_FILE": inspect.getsourcefile(sys.modules[__name__]),
+    }
 
 # ===== Створити платіж (LiqPay) =====
 @app.post("/api/payments/create")
@@ -113,8 +119,8 @@ async def create_payment(req: Request):
     {
       "user_id": 12345,
       "amount": 100,
-      "description": "Top-up …",   # опційно, згенеруємо самі
-      "provider": "liqpay" | "wayforpay"   # тут реалізовано liqpay, інше поверне 400
+      "description": "Top-up …",   # опційно
+      "provider": "liqpay" | "wayforpay"   # тут реалізовано liqpay; інше -> 400
     }
     """
     body = await req.json()
@@ -131,7 +137,6 @@ async def create_payment(req: Request):
     description = body.get("description") or f"Top-up {amount:.2f} by {user_id}"
     order_id = _mk_order_id(user_id)
 
-    # Створюємо LiqPay checkout URL локально (без зовнішнього запиту)
     link = build_checkout_link(
         amount=amount,
         currency=currency,
@@ -148,58 +153,58 @@ async def create_payment(req: Request):
         "data": link["data"],
         "signature": link["signature"],
         "checkout_url": link["checkout_url"],
-        "pay_url": link["checkout_url"],        # уніфіковане поле
-        "invoiceUrl": link["checkout_url"],     # зворотна сумісність
+        "pay_url": link["checkout_url"],
+        "invoiceUrl": link["checkout_url"],
         "public_key": LIQPAY_PUBLIC_KEY,
     }
     return JSONResponse(resp)
 
-# ===== Колбек LiqPay: підтримуємо обидва URL для зручності =====
-async def _liqpay_callback_core(data_b64: str = Form(""), signature: str = Form("")):
-    # 1) валідація підпису
-    if not data_b64 or not signature:
+# ===== Колбек LiqPay (обидві адреси ведуть сюди) =====
+async def _liqpay_callback_core(data: str = Form(""), signature: str = Form("")):
+    # 1) підпис
+    if not data or not signature:
         return PlainTextResponse("bad request", status_code=400)
-    if not verify_callback_signature(data_b64, signature):
+    if not verify_callback_signature(data, signature):
         log.error("Invalid LiqPay signature")
         return PlainTextResponse("invalid signature", status_code=400)
 
-    # 2) парсимо payload
+    # 2) payload
     try:
-        payload = json.loads(base64.b64decode(data_b64).decode("utf-8"))
+        payload = json.loads(base64.b64decode(data).decode("utf-8"))
     except Exception:
         log.exception("Failed to decode LiqPay payload")
         return PlainTextResponse("bad payload", status_code=400)
 
     log.info("LiqPay callback OK: %r", payload)
 
-    # 3) стани, які вважаємо успішними
     status = (payload.get("status") or "").lower()
     if status not in {"success", "sandbox", "subscribed"}:
         return PlainTextResponse("ignored", status_code=200)
 
-    # 4) витягуємо user_id: спочатку з order_id префіксу, потім із description (fallback)
+    # 3) uid із order_id "<uid>-xxxx" або fallback з description "by <uid>"
     import re
-    uid: Optional[int] = None
+    uid = None
     order_id = (payload.get("order_id") or "").strip()
     desc = (payload.get("description") or "").strip()
 
     if "-" in order_id:
-        prefix = order_id.split("-", 1)[0]
-        if prefix.isdigit():
-            uid = int(prefix)
+        pref = order_id.split("-", 1)[0]
+        if pref.isdigit():
+            uid = int(pref)
 
     if uid is None:
         m = re.search(r"\bby\s+(\d+)\b", desc)
         if m:
             uid = int(m.group(1))
 
+    # Критичний лог — ти МАЄШ побачити цей рядок у журналі:
     log.info("LiqPay parsed uid=%r from order_id=%r desc=%r", uid, order_id, desc)
 
     if not uid:
-        log.error("Callback without valid user_id (info): %r", desc)
+        log.error("Callback without valid user_id (info): %r | order_id=%r", desc, order_id)
         return PlainTextResponse("ok", status_code=200)
 
-    # 5) скільки нарахувати
+    # 4) нарахування
     try:
         amount = float(payload.get("amount", 0))
     except Exception:
@@ -207,7 +212,7 @@ async def _liqpay_callback_core(data_b64: str = Form(""), signature: str = Form(
     credits = _credit_user(uid, amount)
     new_balance = _get_balance(uid)
 
-    # 6) нотифікація юзеру
+    # 5) нотиф юзеру
     msg = f"💳 Оплата успішна!\nНараховано: +{credits} кредит(и)\nСума: {amount:.2f} {payload.get('currency','UAH')}"
     if new_balance is not None:
         msg += f"\nПоточний баланс: {new_balance}"
@@ -221,5 +226,4 @@ async def liqpay_callback_full(data: str = Form(""), signature: str = Form("")):
 
 @app.post("/liqpay/callback")
 async def liqpay_callback_short(data: str = Form(""), signature: str = Form("")):
-    # залишено для сумісності з існуючою конфігурацією
     return await _liqpay_callback_core(data, signature)
