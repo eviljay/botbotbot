@@ -8,6 +8,8 @@ from typing import Optional
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+load_dotenv(dotenv_path="/root/mybot/.env")  # шлях до твого .env
+
 
 from payments.wayforpay_utils import (
     build_create_invoice_payload,
