@@ -46,7 +46,7 @@ def build_checkout_link(
 ) -> Dict[str, str]:
     if not PUBLIC_KEY or not PRIVATE_KEY:
         raise RuntimeError("LIQPAY_PUBLIC_KEY / LIQPAY_PRIVATE_KEY are not set")
-
+ 
     params = {
         "public_key": PUBLIC_KEY,
         "version": 3,
