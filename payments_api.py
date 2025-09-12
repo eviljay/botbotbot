@@ -27,7 +27,7 @@ LIQPAY_RESULT_URL = os.getenv("LIQPAY_RESULT_URL", "").strip()        # стор
 LIQPAY_SERVER_URL = os.getenv("LIQPAY_SERVER_URL", "").strip()        # callback URL
 
 # База/бот
-DB_PATH = os.getenv("DB_PATH", "/root/mybot/bot.db")
+DB_PATH = os.getenv("DB_PATH", "/root/mybot/bot.db")                  # ВАЖЛИВО: абсолютний шлях
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
 
@@ -47,6 +47,7 @@ app.add_middleware(
 
 # ===== Допоміжне =====
 def _mk_order_id(user_id: int) -> str:
+    # Префіксуємо order_id user_id’ом, щоб у callback швидко визначати юзера
     return f"{user_id}-{uuid.uuid4().hex[:12]}"
 
 def _ensure_users_table():
@@ -95,10 +96,14 @@ def _notify_user(uid: int, text: str) -> None:
     except Exception:
         log.exception("Failed to send Telegram message")
 
-# ===== Health =====
+# ===== Health / Debug =====
 @app.get("/ping")
 def ping():
     return {"pong": True}
+
+@app.get("/env-check")
+def env_check():
+    return {"DB_PATH": DB_PATH, "CREDIT_PRICE_UAH": CREDIT_PRICE_UAH}
 
 # ===== Створити платіж (LiqPay) =====
 @app.post("/api/payments/create")
@@ -109,10 +114,14 @@ async def create_payment(req: Request):
       "user_id": 12345,
       "amount": 100,
       "description": "Top-up …",   # опційно, згенеруємо самі
-      "provider": "liqpay"         # ігноруємо інші – тут реалізовано LiqPay
+      "provider": "liqpay" | "wayforpay"   # тут реалізовано liqpay, інше поверне 400
     }
     """
     body = await req.json()
+    provider = (body.get("provider") or "liqpay").lower()
+    if provider != "liqpay":
+        raise HTTPException(400, "Only provider=liqpay supported by this API instance")
+
     user_id = int(body.get("user_id") or 0)
     amount = float(body.get("amount") or 0)
     if user_id <= 0 or amount <= 0:
@@ -169,26 +178,32 @@ async def _liqpay_callback_core(data_b64: str = Form(""), signature: str = Form(
         return PlainTextResponse("ignored", status_code=200)
 
     # 4) витягуємо user_id: спочатку з order_id префіксу, потім із description (fallback)
+    import re
     uid: Optional[int] = None
-    order_id = payload.get("order_id") or ""
+    order_id = (payload.get("order_id") or "").strip()
+    desc = (payload.get("description") or "").strip()
+
     if "-" in order_id:
         prefix = order_id.split("-", 1)[0]
         if prefix.isdigit():
             uid = int(prefix)
+
     if uid is None:
-        desc = payload.get("description", "")
-        # очікуємо формат "Top-up <amount> by <uid>"
-        import re
         m = re.search(r"\bby\s+(\d+)\b", desc)
         if m:
             uid = int(m.group(1))
 
+    log.info("LiqPay parsed uid=%r from order_id=%r desc=%r", uid, order_id, desc)
+
     if not uid:
-        log.error("Callback without valid user_id (info): %r", payload.get("description"))
+        log.error("Callback without valid user_id (info): %r", desc)
         return PlainTextResponse("ok", status_code=200)
 
     # 5) скільки нарахувати
-    amount = float(payload.get("amount", 0))
+    try:
+        amount = float(payload.get("amount", 0))
+    except Exception:
+        amount = 0.0
     credits = _credit_user(uid, amount)
     new_balance = _get_balance(uid)
 
