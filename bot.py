@@ -133,7 +133,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Привіт! Я SEO-бот з балансом.\n\n"
         "Команди/меню:\n"
         "🔗 Backlinks — отримати останні або всі беклінки й CSV\n"
-        "💳 Поповнити — оплата через LiqPay\n"
+        "💳 Поповнити — оплата через Portmone\n"
         "📊 Баланс — показати ваш баланс\n"
         "📱 Реєстрація — додати телефон (новим — бонус)\n\n"
         f"Статус реєстрації: {reg_text}\n"
@@ -247,9 +247,13 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             return await query.edit_message_text("Невірна сума.")
 
+        # Викликаємо твій бекенд, який тепер повертає Portmone-посилання
         try:
             async with AsyncClient(timeout=20) as c:
-                r = await c.post(f"{BACKEND_BASE}/api/payments/create", json={"user_id": uid, "amount": amount_uah})
+                r = await c.post(
+                    f"{BACKEND_BASE}/api/payments/create",
+                    json={"user_id": uid, "amount": amount_uah, "description": f"Top-up {amount_uah} by {uid}"},
+                )
                 r.raise_for_status()
                 resp = r.json()
         except ConnectError:
@@ -257,12 +261,19 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except HTTPError as e:
             return await query.edit_message_text(f"Помилка створення платежу: {e}")
 
-        url = resp.get("invoiceUrl")
-        if not url:
+        # Очікуємо універсальний формат з бекенда:
+        # { "ok": true, "order_id": "...", "payment_url": "https://..." }
+        if not isinstance(resp, dict) or not resp.get("ok"):
+            return await query.edit_message_text(f"Створення платежу неуспішне: {resp}")
+
+        pay_url = resp.get("payment_url") or resp.get("invoiceUrl")  # на всякий — сумісність зі старим LiqPay
+        order_id = resp.get("order_id") or "—"
+        if not pay_url:
             return await query.edit_message_text("Не отримав посилання на оплату.")
-        kb = [[InlineKeyboardButton("💳 Оплатити (LiqPay)", url=url)]]
+
+        kb = [[InlineKeyboardButton("💳 Оплатити (Portmone)", url=pay_url)]]
         return await query.edit_message_text(
-            f"Рахунок створено на {amount_uah}₴. Натисніть, щоб оплатити:",
+            f"Замовлення: {order_id}\nРахунок створено на {amount_uah}₴. Натисніть, щоб оплатити:",
             reply_markup=InlineKeyboardMarkup(kb)
         )
 

@@ -1,23 +1,20 @@
 import os
-import uuid
 import logging
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
-from payments.liqpay_utils import build_data, sign, PUBLIC_KEY
+from payments.portmone_utils import build_payment_link, make_order_id
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("payments-api")
+logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="Payments API (LiqPay)")
+app = FastAPI(title="Payments API (Portmone)")
 
-SERVER_URL = os.getenv("LIQPAY_SERVER_URL", "")   # https://<domain>/liqpay/callback
-RESULT_URL = os.getenv("LIQPAY_RESULT_URL", "")   # https://<domain>/thanks
-
-def make_order_id() -> str:
-    return uuid.uuid4().hex[:12]
+SERVER_URL = os.getenv("PORTMONE_CALLBACK_URL", "")   # https://<domain>/api/payments/portmone/callback
+RESULT_URL = os.getenv("PORTMONE_RESULT_URL", "")     # https://<domain>/thanks
+CALLBACK_SECRET = os.getenv("PAYMENTS_CALLBACK_SECRET", "")
 
 @app.post("/api/payments/create")
 async def create_payment(req: Request):
@@ -26,46 +23,51 @@ async def create_payment(req: Request):
       {
         "user_id": 244142655,
         "amount": 100,
-        "currency": "UAH",            # optional
+        "currency": "UAH",            # optional, для відображення; Portmone = UAH
         "description": "100 UAH topup" # optional
       }
+    Повертаємо payment_url (Hosted Checkout Portmone).
     """
     body = await req.json()
     user_id = body.get("user_id")
+    amount = body.get("amount")  # float|int|None
+    description = body.get("description")
+
     if user_id is None:
-        return JSONResponse({"ok": False, "error": "user_id is required"}, status_code=422)
+        raise HTTPException(400, "user_id is required")
 
-    amount = float(body.get("amount", 100))
-    currency = body.get("currency", "UAH")
-    description = body.get("description", f"{int(amount)} UAH topup")
-    order_id = f"{user_id}-{body.get('order_id') or make_order_id()}"
+    order_id = make_order_id()
+    payment_url = build_payment_link(order_id, float(amount) if amount else None, description)
 
-    params = {
-        "version": 3,
-        "public_key": PUBLIC_KEY,
-        "action": "pay",
-        "amount": amount,
-        "currency": currency,
-        "description": description,
-        "order_id": order_id,
-        "result_url": RESULT_URL,
-        "server_url": SERVER_URL,
-        "sandbox": 1,          # remove in prod
-        "info": str(user_id),  # IMPORTANT: used in callback to credit the right user
-    }
+    # Тут можеш зберігати замовлення в БД (order_id, user_id, amount, status=pending)
+    log.info("Create payment: user=%s order=%s amount=%s", user_id, order_id, amount)
 
-    data_b64 = build_data(params)
-    signature = sign(data_b64)
-    checkout_url = f"https://www.liqpay.ua/api/3/checkout?data={data_b64}&signature={signature}"
+    return JSONResponse({"ok": True, "order_id": order_id, "payment_url": payment_url})
 
-    resp = {
-        "ok": True,
-        "order_id": order_id,
-        "public_key": PUBLIC_KEY,
-        "data": data_b64,
-        "signature": signature,
-        "checkout_url": checkout_url,
-        "invoiceUrl": checkout_url,    # дублюємо ключ для сумісності з ботом
-    }
-    log.info("Invoice created: %s (user_id=%s, amount=%.2f)", order_id, user_id, amount)
-    return JSONResponse(resp)
+@app.post("/api/payments/portmone/callback")
+async def portmone_callback(req: Request):
+    """
+    Portmone шле статус оплати (налаштовується в кабінеті як callback/webhook).
+    Раджу додати свій секрет у header або query при налаштуванні (якщо Portmone дозволяє),
+    тут робимо просту перевірку.
+    """
+    # Простий захист: ?secret=...
+    secret = req.query_params.get("secret", "")
+    if CALLBACK_SECRET and secret != CALLBACK_SECRET:
+        raise HTTPException(403, "bad secret")
+
+    data = await req.json()
+    # Очікувані поля з Portmone (назви залежать від конкретного формату; адаптуєш після першого живого Ping):
+    order_id = data.get("shop_order_number") or data.get("order_id")
+    status   = data.get("status")  # APPROVED | DECLINED | PENDING | ...
+    amount   = data.get("amount")
+
+    if not order_id:
+        raise HTTPException(400, "order_id missing")
+
+    log.info("Portmone callback: order=%s status=%s amount=%s", order_id, status, amount)
+
+    # TODO: онови БД: знайти order_id -> виставити статус
+    # if status == "APPROVED": видати доступ/баланс у боті
+
+    return JSONResponse({"ok": True})
