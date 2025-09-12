@@ -19,7 +19,7 @@ import httpx
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("mybot-api")
 
-API_BUILD = "liqpay-v2.1"  # <- маркер версії коду
+API_BUILD = "liqpay-v2.2"  # <- МАРКЕР ВЕРСІЇ
 
 # ===== ENV =====
 DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "UAH")
@@ -145,6 +145,7 @@ async def create_payment(req: Request):
         result_url=LIQPAY_RESULT_URL or None,
         server_url=LIQPAY_SERVER_URL or None,
         language="uk",
+        info=str(user_id),  # <- КЛЮЧ: кладемо user_id у info
     )
     resp = {
         "ok": True,
@@ -181,27 +182,30 @@ async def _liqpay_callback_core(data: str = Form(""), signature: str = Form(""))
     if status not in {"success", "sandbox", "subscribed"}:
         return PlainTextResponse("ignored", status_code=200)
 
-    # 3) uid із order_id "<uid>-xxxx" або fallback з description "by <uid>"
+    # 3) uid: 1) info  2) order_id "<uid>-..."  3) desc "... by <uid>"
     import re
     uid = None
-    order_id = (payload.get("order_id") or "").strip()
-    desc = (payload.get("description") or "").strip()
 
-    if "-" in order_id:
+    info = (payload.get("info") or "").strip()
+    if info.isdigit():
+        uid = int(info)
+
+    order_id = (payload.get("order_id") or "").strip()
+    if uid is None and "-" in order_id:
         pref = order_id.split("-", 1)[0]
         if pref.isdigit():
             uid = int(pref)
 
+    desc = (payload.get("description") or "").strip()
     if uid is None:
         m = re.search(r"\bby\s+(\d+)\b", desc)
         if m:
             uid = int(m.group(1))
 
-    # Критичний лог — ти МАЄШ побачити цей рядок у журналі:
-    log.info("LiqPay parsed uid=%r from order_id=%r desc=%r", uid, order_id, desc)
+    log.info("LiqPay parsed uid=%r | info=%r | order_id=%r | desc=%r", uid, info, order_id, desc)
 
     if not uid:
-        log.error("Callback without valid user_id (info): %r | order_id=%r", desc, order_id)
+        log.error("Callback without valid user_id (info): %r | order_id=%r | info=%r", desc, order_id, info)
         return PlainTextResponse("ok", status_code=200)
 
     # 4) нарахування

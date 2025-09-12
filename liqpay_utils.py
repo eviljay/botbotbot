@@ -15,9 +15,9 @@ def _b64(s: str) -> str:
 
 def build_data(params: Dict[str, Any]) -> str:
     """
-    Мінімальний обов'язковий набір для LiqPay:
+    Мінімальний набір для LiqPay:
       public_key, version=3, action=pay, amount, currency, description, order_id,
-      (опційно) result_url, server_url, language
+      (опційно) result_url, server_url, language, info
     """
     return _b64(json.dumps(params, ensure_ascii=False, separators=(",", ":")))
 
@@ -37,11 +37,12 @@ def build_checkout_link(
     result_url: Optional[str],
     server_url: Optional[str],
     language: str = "uk",
+    info: Optional[str] = None,  # <- new
 ) -> Dict[str, str]:
     if not PUBLIC_KEY or not PRIVATE_KEY:
         raise RuntimeError("LIQPAY_PUBLIC_KEY / LIQPAY_PRIVATE_KEY are not set")
 
-    params = {
+    params: Dict[str, Any] = {
         "public_key": PUBLIC_KEY,
         "version": 3,
         "action": "pay",
@@ -55,6 +56,8 @@ def build_checkout_link(
         params["result_url"] = result_url
     if server_url:
         params["server_url"] = server_url
+    if info:
+        params["info"] = str(info)  # <- кладемо user_id сюди
 
     data_b64 = build_data(params)
     sig = sign(data_b64)
