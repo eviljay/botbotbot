@@ -17,11 +17,17 @@ def _b64(s: str) -> str:
     return base64.b64encode(s.encode("utf-8")).decode("utf-8")
 
 def build_data(params: Dict[str, Any]) -> str:
-    # version=3, action=pay мінімальний набір полів
+    """
+    Мінімальний обов'язковий набір для LiqPay:
+      public_key, version=3, action=pay, amount, currency, description, order_id,
+      (опційно) result_url, server_url, language
+    """
     return _b64(json.dumps(params, ensure_ascii=False, separators=(",", ":")))
 
 def sign(data_b64: str) -> str:
-    # signature = base64( sha1( private_key + data + private_key ) )
+    """
+    signature = base64( sha1( private_key + data + private_key ) )
+    """
     raw = PRIVATE_KEY + data_b64 + PRIVATE_KEY
     digest = hashlib.sha1(raw.encode("utf-8")).digest()
     return base64.b64encode(digest).decode("utf-8")
@@ -59,5 +65,9 @@ def build_checkout_link(
     return {"data": data_b64, "signature": sig, "checkout_url": checkout_url}
 
 def verify_callback_signature(data_b64: str, signature: str) -> bool:
+    """
+    На server_url LiqPay шле form-data: data, signature.
+    Перевірка: sign(data) == signature
+    """
     expected = sign(data_b64)
     return expected == signature
