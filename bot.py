@@ -37,6 +37,7 @@ from dataforseo import DataForSEO
 # ====== Логи ======
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bot")
+log.info("DB_PATH=%s", os.getenv("DB_PATH"))
 
 # ====== ENV ======
 load_dotenv()
@@ -54,7 +55,7 @@ TOPUP_OPTIONS = [int(x.strip()) for x in os.getenv("TOPUP_OPTIONS", "100,250,500
 
 # для адмінки
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
-DB_PATH = os.getenv("DB_PATH", "bot.db")  # очікувана БД, яку використовує dao.py
+DB_PATH = os.getenv("DB_PATH", "/root/mybot/data/bot.db")  # очікувана БД, яку використовує dao.py
 
 PREVIEW_COUNT = 10
 CSV_MAX = 1000

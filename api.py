@@ -1,6 +1,4 @@
- 
-
-# /root/mybot/api.py
+ # /root/mybot/api.py
 import os
 import json
 import sqlite3
@@ -18,7 +16,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import logging
- 
+ log.info("DB_PATH=%s", os.getenv("DB_PATH"))
+
 logger = logging.getLogger("mybot-api")
 logging.basicConfig(level=logging.INFO)
 # === ENV ==DB_PATH = os.getenv("DB_PATH", "mybot.db")=
