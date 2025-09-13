@@ -2,11 +2,10 @@
 import os
 import io
 import csv
-import uuid
 import math
 import logging
 import sqlite3
-from typing import List, Optional
+from typing import List
 
 from dotenv import load_dotenv
 from httpx import AsyncClient, ConnectError, HTTPError
@@ -18,7 +17,6 @@ from telegram import (
     InlineKeyboardButton,
     KeyboardButton,
     ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -45,7 +43,6 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 DFS_LOGIN = os.environ["DATAFORSEO_LOGIN"]
 DFS_PASS = os.environ["DATAFORSEO_PASSWORD"]
 DFS_BASE = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
-# ✅ За замовчуванням бекенд тепер на 8001
 BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8001").rstrip("/")
 
 CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
@@ -55,7 +52,7 @@ TOPUP_OPTIONS = [int(x.strip()) for x in os.getenv("TOPUP_OPTIONS", "100,250,500
 
 # для адмінки
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
-DB_PATH = os.getenv("DB_PATH", "bot.db")  # очікувана БД, яку використовує dao.py
+DB_PATH = os.getenv("DB_PATH", "bot.db")
 
 PREVIEW_COUNT = 10
 CSV_MAX = 1000
@@ -66,16 +63,10 @@ dfs = DataForSEO(DFS_LOGIN, DFS_PASS, DFS_BASE)
 
 # ====== Утиліти ======
 def main_menu_keyboard(registered: bool) -> ReplyKeyboardMarkup:
-    if registered:
-        rows = [
-            [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
-            [KeyboardButton("📊 Баланс")],
-        ]
-    else:
-        rows = [
-            [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
-            [KeyboardButton("📊 Баланс"), KeyboardButton("📱 Реєстрація")],
-        ]
+    rows = [
+        [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
+        [KeyboardButton("📊 Баланс")] if registered else [KeyboardButton("📊 Баланс"), KeyboardButton("📱 Реєстрація")],
+    ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def _extract_items(resp: dict) -> List[dict]:
@@ -132,16 +123,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "Привіт! Я SEO-бот з балансом.\n\n"
         "Команди/меню:\n"
-        "🔗 Backlinks — отримати останні або всі беклінки й CSV\n"
+        "🔗 Backlinks — останні або всі беклінки + CSV\n"
         "💳 Поповнити — оплата через LiqPay\n"
-        "📊 Баланс — показати ваш баланс\n"
+        "📊 Баланс — показ вашого балансу\n"
         "📱 Реєстрація — додати телефон (новим — бонус)\n\n"
         f"Статус реєстрації: {reg_text}\n"
         f"Ваш баланс: {bal} кредитів"
     )
     await update.message.reply_text(text, reply_markup=main_menu_keyboard(reg))
 
-# ====== Реєстрація (ConversationHandler) ======
+# ====== Реєстрація ======
 WAIT_PHONE = 10
 
 def _normalize_phone(p: str) -> str:
@@ -232,7 +223,7 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-# ====== CALLBACKS (topup & backlinks) ======
+# ====== CALLBACKS ======
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -256,15 +247,14 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 resp = r.json()
         except ConnectError:
             return await query.edit_message_text(
-                f"❌ Бекенд недоступний ({BACKEND_BASE}). Перевір API на порті/домені."
+                f"❌ Бекенд недоступний ({BACKEND_BASE}). Перевір API/порт."
             )
         except HTTPError as e:
             body = getattr(e.response, "text", "")[:400]
             return await query.edit_message_text(f"Помилка створення платежу: {e}\n{body}")
 
-        # 1) пряма відповідь API
-        pay_url = resp.get("pay_url") or resp.get("invoiceUrl")
-        # 2) запасний варіант — зібрати з order_id
+        # ✅ Перевага — пряме посилання на LiqPay
+        pay_url = resp.get("invoiceUrl") or resp.get("pay_url")
         if not pay_url:
             order_id = resp.get("order_id")
             if order_id:
@@ -333,7 +323,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.exception("Unexpected error")
         await query.edit_message_text(f"Помилка: {e}")
 
-# ====== Обробка натискань по меню (reply keyboard) ======
+# ====== Обробка натискань по меню ======
 async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
@@ -361,34 +351,27 @@ def _admin_check(uid: int) -> bool:
 def _render_users_page(page: int) -> str:
     offset = (page - 1) * PAGE_SIZE
     with _db() as conn:
-        cur = conn.execute("SELECT COUNT(*) FROM users")
-        total = cur.fetchone()[0]
-        cur = conn.execute(
+        total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        rows = conn.execute(
             "SELECT user_id, balance, COALESCE(phone,'') FROM users ORDER BY user_id LIMIT ? OFFSET ?",
             (PAGE_SIZE, offset),
-        )
-        rows = cur.fetchall()
+        ).fetchall()
 
     if total == 0:
         return "Користувачів ще немає."
 
-    lines = [f"👤 Користувачі (всього: {total}) | сторінка {page}"]
+    import math as _math
+    lines = [f"👤 Користувачі (всього: {total}) | сторінка {page}/{max(1, _math.ceil(total / PAGE_SIZE))}"]
     for uid, bal, phone in rows:
         phone_disp = phone if phone else "—"
         lines.append(f"• {uid}: баланс {bal}, телефон {phone_disp}")
     return "\n".join(lines)
 
-def _admin_kb(page: int, total: int) -> InlineKeyboardMarkup:
-    max_page = max(1, math.ceil(total / PAGE_SIZE))
-    buttons = []
-    with _db() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+def _admin_kb(page: int) -> InlineKeyboardMarkup:
+    buttons = [InlineKeyboardButton("↻ Оновити", callback_data=f"admin|page|{page}")]
     if page > 1:
-        buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"admin|page|{page-1}"))
-    if page < max_page:
-        buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"admin|page|{page+1}"))
-    if not buttons:
-        buttons = [InlineKeyboardButton("↻ Оновити", callback_data=f"admin|page|{page}")]
+        buttons.insert(0, InlineKeyboardButton("⬅️ Назад", callback_data=f"admin|page|{page-1}"))
+    buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"admin|page|{page+1}"))
     return InlineKeyboardMarkup([buttons])
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -396,9 +379,7 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _admin_check(uid):
         return await update.message.reply_text("⛔️ Доступ заборонено.")
     text = _render_users_page(1)
-    with _db() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    await update.message.reply_text(text, reply_markup=_admin_kb(1, total))
+    await update.message.reply_text(text, reply_markup=_admin_kb(1))
 
 async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -406,7 +387,6 @@ async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not _admin_check(uid):
         return await query.edit_message_text("⛔️ Доступ заборонено.")
-
     parts = (query.data or "").split("|")
     if len(parts) == 3 and parts[0] == "admin" and parts[1] == "page":
         try:
@@ -414,9 +394,7 @@ async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             page = 1
         text = _render_users_page(page)
-        with _db() as conn:
-            total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        return await query.edit_message_text(text, reply_markup=_admin_kb(page, total))
+        return await query.edit_message_text(text, reply_markup=_admin_kb(page))
 
 # ====== MAIN ======
 def main():
@@ -444,7 +422,7 @@ def main():
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(on_admin_cb, pattern=r"^admin\|"))
 
-    # Callback’и (topup/backlinks)
+    # Callback’и
     app.add_handler(CallbackQueryHandler(on_choice))
 
     # Меню-тексти

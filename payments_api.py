@@ -9,7 +9,7 @@ from uuid import uuid4
 from typing import Optional, Tuple
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from dotenv import load_dotenv
 import httpx
 
@@ -33,7 +33,7 @@ LIQPAY_SERVER_URL = os.getenv("LIQPAY_SERVER_URL", "")   # https://<domain>/liqp
 LIQPAY_RESULT_URL = os.getenv("LIQPAY_RESULT_URL", "")   # https://<domain>/thanks
 LIQPAY_SKIP_SIGNATURE = os.getenv("LIQPAY_SKIP_SIGNATURE", "0") == "1"
 
-# Публічна базова адреса твого бекенду для формування pay_url (заміни на свій домен у .env)
+# Публічна база для фолбек-сторінки /pay/{order_id}
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8001")
 
 app = FastAPI(title="Payments API (LiqPay)")
@@ -57,7 +57,7 @@ def init_db() -> None:
         );
         """)
 
-        # payments (канонічна структура з урахуванням твоєї поточної)
+        # payments
         conn.execute("""
         CREATE TABLE IF NOT EXISTS payments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,17 +74,14 @@ def init_db() -> None:
         );
         """)
 
-        # індекси
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_order_reference ON payments(order_reference);")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_order_id ON payments(order_id);")
 
-        # легкі міграції/узгодження на випадок старих таблиць
+        # легкі міграції/узгодження
         cols = {r[1] for r in conn.execute("PRAGMA table_info(payments);").fetchall()}
-
         if "provider" not in cols:
             conn.execute("ALTER TABLE payments ADD COLUMN provider TEXT;")
             conn.execute("UPDATE payments SET provider='liqpay' WHERE provider IS NULL;")
-
         if "order_reference" not in cols:
             conn.execute("ALTER TABLE payments ADD COLUMN order_reference TEXT;")
             conn.execute("""
@@ -92,14 +89,11 @@ def init_db() -> None:
                 SET order_reference = COALESCE(order_id, printf('legacy-%s', hex(randomblob(6))))
                 WHERE order_reference IS NULL;
             """)
-
         if "order_id" not in cols:
             conn.execute("ALTER TABLE payments ADD COLUMN order_id TEXT;")
             conn.execute("UPDATE payments SET order_id=order_reference WHERE order_id IS NULL;")
-
         if "currency" not in cols:
             conn.execute("ALTER TABLE payments ADD COLUMN currency TEXT DEFAULT 'UAH';")
-
         if "status" not in cols:
             conn.execute("ALTER TABLE payments ADD COLUMN status TEXT DEFAULT 'pending';")
 
@@ -163,12 +157,7 @@ def health():
 async def create_payment(req: Request):
     """
     Body:
-      {
-        "user_id": 244142655,
-        "amount": 100,
-        "currency": "UAH",           # optional
-        "description": "Top-up 100"  # optional
-      }
+      { "user_id": 244142655, "amount": 100, "currency": "UAH", "description": "Top-up 100" }
     """
     body = await req.json()
     user_id = int(body["user_id"])
@@ -178,7 +167,7 @@ async def create_payment(req: Request):
     provider = "liqpay"
 
     order_id = uuid4().hex[:12]
-    order_reference = order_id  # утримуємо однаковими для простоти відповідності
+    order_reference = order_id  # однаково для спрощення
 
     with get_conn() as conn:
         ensure_user(conn, user_id)
@@ -187,7 +176,11 @@ async def create_payment(req: Request):
             VALUES (?, ?, ?, ?, ?, 'pending', NULL, ?)
         """, (user_id, provider, order_reference, amount, currency, order_id))
 
+    # Збираємо дані для LiqPay
     data_b64, signature = lp_build_data(order_id=order_id, amount=amount, currency=currency, description=description)
+    # Прямий LiqPay URL (саме його хочемо віддавати боту)
+    invoice_url = f"https://www.liqpay.ua/api/3/checkout?data={data_b64}&signature={signature}"
+    # Залишимо фолбек на випадок, якщо захочеш сторінку з автопостом
     pay_url = f"{PUBLIC_BASE_URL}/pay/{order_id}"
 
     log.info("Create payment: user_id=%s amount=%s order_id=%s", user_id, amount, order_id)
@@ -197,13 +190,14 @@ async def create_payment(req: Request):
         "provider": provider,
         "order_id": order_id,
         "order_reference": order_reference,
-        "pay_url": pay_url,
+        "invoiceUrl": invoice_url,   # ← головне поле
+        "pay_url": pay_url,          # ← запасне поле
         "liqpay": {"data": data_b64, "signature": signature}
     })
 
 @app.get("/pay/{order_id}", response_class=HTMLResponse)
 def pay_page(order_id: str):
-    """HTML-сторінка, яка авто-постить у LiqPay checkout."""
+    """Фолбек-HTML, який авто-постить у LiqPay checkout (на випадок якщо треба)."""
     with get_conn() as conn:
         row = conn.execute("""
             SELECT amount, currency
@@ -216,32 +210,20 @@ def pay_page(order_id: str):
     amount, currency = row
     data_b64, signature = lp_build_data(order_id=order_id, amount=amount, currency=currency, description=f"Top-up {amount} {currency}")
     checkout_url = "https://www.liqpay.ua/api/3/checkout"
-
     return f"""<!doctype html>
 <html lang="uk">
   <head>
     <meta charset="utf-8" />
     <title>Оплата {amount} {currency}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; display:flex; min-height:100vh; align-items:center; justify-content:center; background:#f8fafc; }}
-      .box {{ max-width: 460px; width:100%; padding: 24px; border:1px solid #e5e7eb; border-radius:12px; background:#fff; box-shadow: 0 6px 18px rgba(0,0,0,0.06); }}
-      .btn {{ display:inline-block; padding:12px 16px; border-radius:8px; border:0; background:#111827; color:#fff; font-weight:600; cursor:pointer; }}
-      .muted {{ color:#6b7280; font-size:14px; }}
-    </style>
+    <script>function go(){{document.getElementById('lp').submit();}}</script>
   </head>
-  <body>
-    <div class="box">
-      <h2>Переходимо до оплати</h2>
-      <p>Сума: <b>{amount} {currency}</b></p>
-      <form id="lp" method="POST" action="{checkout_url}">
-        <input type="hidden" name="data" value="{data_b64}"/>
-        <input type="hidden" name="signature" value="{signature}"/>
-        <button class="btn" type="submit">Відкрити LiqPay</button>
-      </form>
-      <p class="muted">Якщо сторінка не відкрилась автоматично — натисніть кнопку.</p>
-      <script>document.getElementById('lp').submit();</script>
-    </div>
+  <body onload="go()">
+    <form id="lp" method="POST" action="{checkout_url}">
+      <input type="hidden" name="data" value="{data_b64}"/>
+      <input type="hidden" name="signature" value="{signature}"/>
+      <noscript><button type="submit">Відкрити LiqPay</button></noscript>
+    </form>
   </body>
 </html>"""
 
@@ -255,7 +237,6 @@ async def liqpay_callback(req: Request):
     data_b64 = form.get("data", "")
     signature = form.get("signature", "")
 
-    # Перевірка підпису (можна вимкнути LIQPAY_SKIP_SIGNATURE=1 для локальних тестів)
     if not LIQPAY_SKIP_SIGNATURE:
         try:
             expected = lp_sign(data_b64)
@@ -268,7 +249,6 @@ async def liqpay_callback(req: Request):
     else:
         log.warning("Signature check DISABLED (LIQPAY_SKIP_SIGNATURE=1)")
 
-    # Розбір payload
     try:
         payload = json.loads(base64.b64decode(data_b64))
     except Exception:
@@ -285,12 +265,10 @@ async def liqpay_callback(req: Request):
     if not order_id:
         return JSONResponse({"ok": False, "err": "no-order-id"}, status_code=400)
 
-    # Працюємо лише з успішними статусами
     if status not in ("success", "sandbox", "subscribed"):
         log.info("Non-success status (%s), ignoring credit", status)
         return JSONResponse({"ok": True})
 
-    # Оновлення платежу + зарахування
     user_id: Optional[int] = None
     new_balance: int = 0
     credits: int = 0
@@ -310,14 +288,12 @@ async def liqpay_callback(req: Request):
 
         pid, user_id, amount_db, status_db = row
 
-        # оновити статус + зберегти сирий JSON
         conn.execute("""
             UPDATE payments
             SET status=?, raw_json=?, updated_at=datetime('now')
             WHERE id=?
         """, ("success", json.dumps(payload, ensure_ascii=False), pid))
 
-        # нарахувати кредити (ідемпотентність: простота — допускаємо повторення; можна додати прапорець "credited")
         credits = credits_from_amount(amount_db)
         conn.execute("""
             UPDATE users
@@ -329,7 +305,6 @@ async def liqpay_callback(req: Request):
 
     log.info("Credited: user_id=%s credits=%s -> new_balance=%s", user_id, credits, new_balance)
 
-    # Повідомлення у TG
     if user_id:
         text = (
             "💳 Оплату отримано!\n"
