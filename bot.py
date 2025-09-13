@@ -45,7 +45,8 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 DFS_LOGIN = os.environ["DATAFORSEO_LOGIN"]
 DFS_PASS = os.environ["DATAFORSEO_PASSWORD"]
 DFS_BASE = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
-BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8000").rstrip("/")
+# ✅ За замовчуванням бекенд тепер на 8001
+BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8001").rstrip("/")
 
 CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
 BACKLINKS_CHARGE_UAH = float(os.getenv("BACKLINKS_CHARGE_UAH", "5"))
@@ -65,7 +66,6 @@ dfs = DataForSEO(DFS_LOGIN, DFS_PASS, DFS_BASE)
 
 # ====== Утиліти ======
 def main_menu_keyboard(registered: bool) -> ReplyKeyboardMarkup:
-    """Якщо юзер зареєстрований — без кнопки реєстрації."""
     if registered:
         rows = [
             [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
@@ -182,7 +182,6 @@ async def on_contact_register(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         msg = f"✅ Телефон збережено.\nВаш баланс: {bal}"
 
-    # Повертаємо головне меню БЕЗ кнопки “Реєстрація”
     await update.message.reply_text(msg, reply_markup=main_menu_keyboard(True))
     return ConversationHandler.END
 
@@ -249,18 +248,36 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             async with AsyncClient(timeout=20) as c:
-                r = await c.post(f"{BACKEND_BASE}/api/payments/create", json={"user_id": uid, "amount": amount_uah})
+                r = await c.post(
+                    f"{BACKEND_BASE}/api/payments/create",
+                    json={"user_id": uid, "amount": amount_uah}
+                )
                 r.raise_for_status()
                 resp = r.json()
         except ConnectError:
-            return await query.edit_message_text("❌ Бекенд недоступний. Перевір BACKEND_BASE і mybot-api (порт 8000).")
+            return await query.edit_message_text(
+                f"❌ Бекенд недоступний ({BACKEND_BASE}). Перевір API на порті/домені."
+            )
         except HTTPError as e:
-            return await query.edit_message_text(f"Помилка створення платежу: {e}")
+            body = getattr(e.response, "text", "")[:400]
+            return await query.edit_message_text(f"Помилка створення платежу: {e}\n{body}")
 
-        url = resp.get("invoiceUrl")
-        if not url:
-            return await query.edit_message_text("Не отримав посилання на оплату.")
-        kb = [[InlineKeyboardButton("💳 Оплатити (LiqPay)", url=url)]]
+        # 1) пряма відповідь API
+        pay_url = resp.get("pay_url") or resp.get("invoiceUrl")
+        # 2) запасний варіант — зібрати з order_id
+        if not pay_url:
+            order_id = resp.get("order_id")
+            if order_id:
+                pay_url = f"{BACKEND_BASE}/pay/{order_id}"
+
+        if not pay_url:
+            preview = (str(resp)[:400]).replace("\n", " ")
+            return await query.edit_message_text(
+                "Не отримав посилання на оплату. "
+                f"Відповідь бекенду: {preview}"
+            )
+
+        kb = [[InlineKeyboardButton("💳 Оплатити (LiqPay)", url=pay_url)]]
         return await query.edit_message_text(
             f"Рахунок створено на {amount_uah}₴. Натисніть, щоб оплатити:",
             reply_markup=InlineKeyboardMarkup(kb)
