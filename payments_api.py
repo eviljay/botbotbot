@@ -145,7 +145,7 @@ async def create_payment(req: Request):
         result_url=LIQPAY_RESULT_URL or None,
         server_url=LIQPAY_SERVER_URL or None,
         language="uk",
-        info=str(user_id),  # <- КЛЮЧ: кладемо user_id у info
+      
     )
     resp = {
         "ok": True,
