@@ -52,10 +52,12 @@ TOPUP_OPTIONS = [int(x.strip()) for x in os.getenv("TOPUP_OPTIONS", "100,250,500
 
 # для адмінки
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
-DB_PATH = os.getenv("DB_PATH", "bot.db")
+DB_PATH = os.getenv("DB_PATH", "bot.db")  # очікувана БД, яку використовує dao.py
 
 PREVIEW_COUNT = 10
 CSV_MAX = 1000
+PAGE_SIZE = 20
+WAIT_PHONE = 10
 
 # ====== INIT ======
 init_db()
@@ -63,10 +65,16 @@ dfs = DataForSEO(DFS_LOGIN, DFS_PASS, DFS_BASE)
 
 # ====== Утиліти ======
 def main_menu_keyboard(registered: bool) -> ReplyKeyboardMarkup:
-    rows = [
-        [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
-        [KeyboardButton("📊 Баланс")] if registered else [KeyboardButton("📊 Баланс"), KeyboardButton("📱 Реєстрація")],
-    ]
+    if registered:
+        rows = [
+            [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
+            [KeyboardButton("📊 Баланс")],
+        ]
+    else:
+        rows = [
+            [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
+            [KeyboardButton("📊 Баланс"), KeyboardButton("📱 Реєстрація")],
+        ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def _extract_items(resp: dict) -> List[dict]:
@@ -123,9 +131,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "Привіт! Я SEO-бот з балансом.\n\n"
         "Команди/меню:\n"
-        "🔗 Backlinks — останні або всі беклінки + CSV\n"
+        "🔗 Backlinks — отримати останні або всі беклінки й CSV\n"
         "💳 Поповнити — оплата через LiqPay\n"
-        "📊 Баланс — показ вашого балансу\n"
+        "📊 Баланс — показати ваш баланс\n"
         "📱 Реєстрація — додати телефон (новим — бонус)\n\n"
         f"Статус реєстрації: {reg_text}\n"
         f"Ваш баланс: {bal} кредитів"
@@ -133,8 +141,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=main_menu_keyboard(reg))
 
 # ====== Реєстрація ======
-WAIT_PHONE = 10
-
 def _normalize_phone(p: str) -> str:
     digits = "".join(ch for ch in p if ch.isdigit())
     return ("+" + digits) if digits and not p.strip().startswith("+") else (p if p.startswith("+") else "+" + digits)
@@ -223,7 +229,7 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-# ====== CALLBACKS ======
+# ====== CALLBACKS (topup & backlinks) ======
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -245,6 +251,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 r.raise_for_status()
                 resp = r.json()
+                log.info("payments.create resp: %s", resp)
         except ConnectError:
             return await query.edit_message_text(
                 f"❌ Бекенд недоступний ({BACKEND_BASE}). Перевір API/порт."
@@ -253,12 +260,10 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             body = getattr(e.response, "text", "")[:400]
             return await query.edit_message_text(f"Помилка створення платежу: {e}\n{body}")
 
-        # ✅ Перевага — пряме посилання на LiqPay
+        # Пріоритет — прямий LiqPay URL
         pay_url = resp.get("invoiceUrl") or resp.get("pay_url")
-        if not pay_url:
-            order_id = resp.get("order_id")
-            if order_id:
-                pay_url = f"{BACKEND_BASE}/pay/{order_id}"
+        if not pay_url and resp.get("order_id"):
+            pay_url = f"{BACKEND_BASE}/pay/{resp['order_id']}"
 
         if not pay_url:
             preview = (str(resp)[:400]).replace("\n", " ")
@@ -267,11 +272,20 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Відповідь бекенду: {preview}"
             )
 
-        kb = [[InlineKeyboardButton("💳 Оплатити (LiqPay)", url=pay_url)]]
-        return await query.edit_message_text(
-            f"Рахунок створено на {amount_uah}₴. Натисніть, щоб оплатити:",
-            reply_markup=InlineKeyboardMarkup(kb)
+        # Надсилаємо НОВЕ повідомлення з кнопкою + дублюємо URL текстом
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Оплатити (LiqPay)", url=pay_url)]])
+        await context.bot.send_message(
+            chat_id=uid,
+            text=(f"Рахунок створено на {amount_uah}₴.\n"
+                  f"Тисни кнопку нижче або відкрий лінк вручну:\n{pay_url}"),
+            reply_markup=kb
         )
+        # Попереднє повідомлення акуратно оновимо
+        try:
+            await query.edit_message_text("Рахунок створено, дивись наступне повідомлення з кнопкою.")
+        except Exception:
+            pass
+        return
 
     # --- Платні дії (backlinks) ---
     if len(data) != 3:
@@ -323,7 +337,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.exception("Unexpected error")
         await query.edit_message_text(f"Помилка: {e}")
 
-# ====== Обробка натискань по меню ======
+# ====== Обробка натискань по меню (reply keyboard) ======
 async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
@@ -340,8 +354,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await register_cmd_or_menu(update, context)
 
 # ====== АДМІНКА ======
-PAGE_SIZE = 20
-
 def _db() -> sqlite3.Connection:
     return sqlite3.connect(DB_PATH)
 
@@ -351,11 +363,13 @@ def _admin_check(uid: int) -> bool:
 def _render_users_page(page: int) -> str:
     offset = (page - 1) * PAGE_SIZE
     with _db() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        rows = conn.execute(
+        cur = conn.execute("SELECT COUNT(*) FROM users")
+        total = cur.fetchone()[0]
+        cur = conn.execute(
             "SELECT user_id, balance, COALESCE(phone,'') FROM users ORDER BY user_id LIMIT ? OFFSET ?",
             (PAGE_SIZE, offset),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
 
     if total == 0:
         return "Користувачів ще немає."
@@ -422,7 +436,7 @@ def main():
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(on_admin_cb, pattern=r"^admin\|"))
 
-    # Callback’и
+    # Callback’и (topup/backlinks)
     app.add_handler(CallbackQueryHandler(on_choice))
 
     # Меню-тексти
