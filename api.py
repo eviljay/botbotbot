@@ -61,7 +61,16 @@ def init_db():
         conn.commit()
 
 init_db()
-
+async def tg_send_message(chat_id: int, text: str):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(url, json={"chat_id": chat_id, "text": text})
+            # Якщо бот ніколи не бачив юзера -> 400 chat not found
+            if r.status_code >= 400:
+                logger.warning("Telegram sendMessage failed: %s | body=%s", r.status_code, r.text)
+    except Exception as e:
+        logger.warning("Telegram sendMessage exception: %s", e)
 # === HELPERS ===
 def liqpay_sign(data_b64: str) -> str:
     # signature = base64( sha1( private_key + data + private_key ) )

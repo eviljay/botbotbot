@@ -1,73 +1,38 @@
-# payments/liqpay_utils.py
-import os
-import json
-import base64
-import hashlib
-from typing import Dict, Any, Optional
+import json, base64, hashlib, os
 
-LIQPAY_CHECKOUT = "https://www.liqpay.ua/api/3/checkout"
+LIQPAY_PUBLIC = os.getenv("LIQPAY_PUBLIC")
+LIQPAY_PRIVATE = os.getenv("LIQPAY_PRIVATE")
+LIQPAY_SANDBOX = int(os.getenv("LIQPAY_SANDBOX", "1"))
+BASE_URL = os.getenv("BASE_URL", "").rstrip("/")
 
-PUBLIC_KEY = os.getenv("LIQPAY_PUBLIC_KEY", "").strip()
-PRIVATE_KEY = os.getenv("LIQPAY_PRIVATE_KEY", "").strip()
+def b64(s: bytes) -> str:
+    return base64.b64encode(s).decode("utf-8")
 
-def _b64(s: str) -> str:
-    return base64.b64encode(s.encode("utf-8")).decode("utf-8")
+def liqpay_signature(data_b64: str) -> str:
+    # signature = base64( sha1(private_key + data + private_key) )
+    raw = (LIQPAY_PRIVATE + data_b64 + LIQPAY_PRIVATE).encode("utf-8")
+    sha1 = hashlib.sha1(raw).digest()
+    return b64(sha1)
 
-def build_data(params: Dict[str, Any]) -> str:
-    """
-    Мінімальний набір для LiqPay:
-      public_key, version=3, action=pay, amount, currency, description, order_id,
-      (опційно) result_url, server_url, language, info
-    """
-    return _b64(json.dumps(params, ensure_ascii=False, separators=(",", ":")))
-
-def sign(data_b64: str) -> str:
-    """
-    signature = base64( sha1( private_key + data + private_key ) )
-    """
-    raw = PRIVATE_KEY + data_b64 + PRIVATE_KEY
-    digest = hashlib.sha1(raw.encode("utf-8")).digest()
-    return base64.b64encode(digest).decode("utf-8")
-
-def build_checkout_link(
-    amount: float,
-    currency: str,
-    description: str,
-    order_id: str,
-    result_url: Optional[str],
-    server_url: Optional[str],
-    language: str = "uk",
-    info: Optional[str] = None,  # <- new
-) -> Dict[str, str]:
-    if not PUBLIC_KEY or not PRIVATE_KEY:
-        raise RuntimeError("LIQPAY_PUBLIC_KEY / LIQPAY_PRIVATE_KEY are not set")
-
-    params: Dict[str, Any] = {
-        "public_key": PUBLIC_KEY,
+def make_checkout_data(order_id: str, amount: float, description: str, currency="UAH", action="pay"):
+    payload = {
         "version": 3,
-        "action": "pay",
-        "amount": float(f"{amount:.2f}"),
+        "public_key": LIQPAY_PUBLIC,
+        "action": action,               # 'pay'
+        "amount": str(amount),
         "currency": currency,
-        "description": description[:255],
+        "description": description,
         "order_id": order_id,
-        "language": language,
+        "sandbox": LIQPAY_SANDBOX,
+        # LiqPay надсилатиме POST сюди (потрібен https)
+        "server_url": f"{BASE_URL}/liqpay/callback",
+        # Куди повертати юзера після оплати (опційно, можна зробити свою сторінку "Дякуємо")
+        "result_url": f"{BASE_URL}/thanks"
     }
-    if result_url:
-        params["result_url"] = result_url
-    if server_url:
-        params["server_url"] = server_url
-    if info:
-        params["info"] = str(info)  # <- кладемо user_id сюди
+    data_b64 = b64(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    sign = liqpay_signature(data_b64)
+    return data_b64, sign
 
-    data_b64 = build_data(params)
-    sig = sign(data_b64)
-    checkout_url = f"{LIQPAY_CHECKOUT}?data={data_b64}&signature={sig}"
-    return {"data": data_b64, "signature": sig, "checkout_url": checkout_url}
-
-def verify_callback_signature(data_b64: str, signature: str) -> bool:
-    """
-    На server_url LiqPay шле form-data: data, signature.
-    Перевірка: sign(data) == signature
-    """
-    expected = sign(data_b64)
-    return expected == signature
+def make_checkout_url(order_id: str, amount: float, description: str):
+    data_b64, sign = make_checkout_data(order_id, amount, description)
+    return f"https://www.liqpay.ua/api/3/checkout?data={data_b64}&signature={sign}"
