@@ -22,7 +22,7 @@ import logging
 logger = logging.getLogger("mybot-api")
 logging.basicConfig(level=logging.INFO)
 # === ENV ==DB_PATH = os.getenv("DB_PATH", "mybot.db")=
-DB_PATH = os.getenv("DB_PATH", "/root/mybot/bot.db")
+DB_PATH = os.getenv("DB_PATH", "/root/mybot/data/bot.db")
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 LIQPAY_PUBLIC_KEY = os.environ["LIQPAY_PUBLIC_KEY"]
 LIQPAY_PRIVATE_KEY = os.environ["LIQPAY_PRIVATE_KEY"]

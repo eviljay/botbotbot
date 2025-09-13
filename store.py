@@ -1,6 +1,6 @@
 import sqlite3, os, threading
 
-DB_PATH = os.getenv("DB_PATH", "bot.db")
+DB_PATH = os.getenv("DB_PATH", "/root/mybot/data/bot.db")
 _lock = threading.Lock()
 
 def init_db():

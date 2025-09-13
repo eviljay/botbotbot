@@ -4,7 +4,7 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Optional, Tuple, List, Dict
 
-DB_PATH = os.getenv("DB_PATH", "mybot.db")
+DB_PATH = os.getenv("DB_PATH", "/root/mybot/data/bot.db")
 
 @contextmanager
 def _conn():
