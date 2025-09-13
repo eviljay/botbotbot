@@ -1,233 +1,347 @@
 # payments_api.py
 import os
-import sys
+import re
 import json
-import uuid
-import math
 import base64
+import uuid
+import hashlib
 import logging
-import sqlite3
-import inspect
-from typing import Optional
+from typing import Optional, Dict, Any
 
-from fastapi import FastAPI, Request, HTTPException, Form
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import httpx
+from fastapi.responses import HTMLResponse, JSONResponse
+from dotenv import load_dotenv
+import requests
 
-# ===== Логи =====
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("mybot-api")
+# =========================
+# ENV / CONFIG
+# =========================
+load_dotenv()
 
-API_BUILD = "liqpay-v2.2"  # <- МАРКЕР ВЕРСІЇ
-
-# ===== ENV =====
-DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "UAH")
-
-# LiqPay
+# LiqPay keys
 LIQPAY_PUBLIC_KEY = os.getenv("LIQPAY_PUBLIC_KEY", "").strip()
 LIQPAY_PRIVATE_KEY = os.getenv("LIQPAY_PRIVATE_KEY", "").strip()
-LIQPAY_RESULT_URL = os.getenv("LIQPAY_RESULT_URL", "").strip()        # сторінка "успіх"
-LIQPAY_SERVER_URL = os.getenv("LIQPAY_SERVER_URL", "").strip()        # callback URL
 
-# База/бот
-DB_PATH = os.getenv("DB_PATH", "/root/mybot/bot.db")  # ВАЖЛИВО: абсолютний шлях
+# Callback/result URLs MUST be public HTTPS for production
+SERVER_URL = os.getenv("LIQPAY_SERVER_URL", "").strip()   # e.g. https://your.domain/liqpay/callback
+RESULT_URL = os.getenv("LIQPAY_RESULT_URL", "").strip()   # e.g. https://your.domain/thanks
+
+# Optional: sandbox status treat as success (useful while testing)
+TREAT_SANDBOX_SUCCESS = os.getenv("LIQPAY_TREAT_SANDBOX_AS_SUCCESS", "true").lower() in ("1", "true", "yes")
+
+# Telegram bot for user notifications
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
 
-# ===== Утиліти LiqPay =====
-from payments.liqpay_utils import build_checkout_link, verify_callback_signature
+# App settings
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
-# ===== FastAPI =====
+"""
+Sample .env:
+
+LIQPAY_PUBLIC_KEY=your_public_key_here
+LIQPAY_PRIVATE_KEY=your_private_key_here
+LIQPAY_SERVER_URL=https://server1.seoswiss.online/liqpay/callback
+LIQPAY_RESULT_URL=https://server1.seoswiss.online/thanks
+TELEGRAM_BOT_TOKEN=123456789:ABC-DEF...
+LIQPAY_TREAT_SANDBOX_AS_SUCCESS=true
+LOG_LEVEL=INFO
+"""
+
+logging.basicConfig(level=LOG_LEVEL)
+log = logging.getLogger("payments-api")
+
+
+# =========================
+# FASTAPI APP
+# =========================
 app = FastAPI(title="Payments API (LiqPay)")
+
+# CORS (за потреби відкрий свій фронт)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
+    allow_origins=["*"],  # підкоригуй на проді
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# ===== Допоміжне =====
-def _mk_order_id(user_id: int) -> str:
-    # Префікс з user_id для надійного зв’язування платежу і юзера
-    return f"{user_id}-{uuid.uuid4().hex[:12]}"
 
-def _ensure_users_table():
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("""
-              CREATE TABLE IF NOT EXISTS users(
-                user_id INTEGER PRIMARY KEY,
-                balance INTEGER DEFAULT 0,
-                phone TEXT
-              )
-            """)
-            conn.commit()
-    except Exception:
-        log.exception("Failed to ensure users table")
+# =========================
+# UTILS
+# =========================
+def make_order_id() -> str:
+    """Short unique id."""
+    return uuid.uuid4().hex[:12]
 
-def _credit_user(uid: int, amount_uah: float) -> int:
-    """Нарахувати кредити за суму в UAH. Повертає нараховану кількість."""
-    credits = max(1, math.ceil(float(amount_uah) / CREDIT_PRICE_UAH))
-    _ensure_users_table()
-    with sqlite3.connect(DB_PATH) as conn:
-        cur = conn.execute("UPDATE users SET balance = COALESCE(balance,0) + ? WHERE user_id = ?", (credits, uid))
-        if cur.rowcount == 0:
-            conn.execute("INSERT OR IGNORE INTO users(user_id, balance) VALUES(?, ?)", (uid, credits))
-        conn.commit()
-    return credits
 
-def _get_balance(uid: int) -> Optional[int]:
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            row = conn.execute("SELECT balance FROM users WHERE user_id = ?", (uid,)).fetchone()
-            return int(row[0]) if row else None
-    except Exception:
-        log.exception("Failed to read balance")
-        return None
+def b64encode_str(s: str) -> str:
+    return base64.b64encode(s.encode("utf-8")).decode("utf-8")
 
-def _notify_user(uid: int, text: str) -> None:
-    if not TELEGRAM_BOT_TOKEN or not uid:
+
+def build_data(payload: Dict[str, Any]) -> str:
+    """LiqPay requires base64-encoded JSON as 'data'."""
+    js = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return base64.b64encode(js.encode("utf-8")).decode("utf-8")
+
+
+def sign_data(data_b64: str) -> str:
+    """signature = base64( sha1( PRIVATE_KEY + data + PRIVATE_KEY ) )"""
+    raw = (LIQPAY_PRIVATE_KEY or "") + data_b64 + (LIQPAY_PRIVATE_KEY or "")
+    digest = hashlib.sha1(raw.encode("utf-8")).digest()
+    return base64.b64encode(digest).decode("utf-8")
+
+
+def verify_signature(data_b64: str, signature: str) -> bool:
+    expected = sign_data(data_b64)
+    ok = (expected == signature)
+    if not ok:
+        log.warning("Bad LiqPay signature: expected %s, got %s", expected, signature)
+    return ok
+
+
+def build_checkout_link(
+    *,
+    amount: float,
+    currency: str,
+    description: str,
+    order_id: str,
+    server_url: str,
+    result_url: str,
+    sandbox: Optional[int] = None,
+    **extra,
+) -> str:
+    """
+    Returns a GET-able LiqPay checkout URL constructed from data+signature.
+    For embedded widget you usually render a POST form; but this URL also works.
+    """
+    payload = {
+        "public_key": LIQPAY_PUBLIC_KEY,
+        "version": 3,
+        "action": "pay",
+        "amount": amount,
+        "currency": currency,
+        "description": description,
+        "order_id": order_id,
+        "server_url": server_url,
+        "result_url": result_url,
+        **extra,  # allow custom fields if needed
+    }
+    if sandbox is not None:
+        payload["sandbox"] = sandbox
+
+    data_b64 = build_data(payload)
+    signature = sign_data(data_b64)
+    # LiqPay's standard flow is via a form POST, but their /checkout supports data+signature in query
+    return f"https://www.liqpay.ua/api/3/checkout?data={data_b64}&signature={signature}"
+
+
+# ---- very simple idempotency memory (replace with DB/Redis in prod) ----
+PROCESSED_TX = set()
+
+def has_processed(tx_id: Optional[str]) -> bool:
+    return bool(tx_id) and tx_id in PROCESSED_TX
+
+def mark_processed(tx_id: Optional[str]):
+    if tx_id:
+        PROCESSED_TX.add(tx_id)
+
+# ---- stubs: replace with your real storage/DAO ----
+def credit_user(user_id: int, amount: float, currency: str):
+    """
+    TODO: UPDATE USER BALANCE IN YOUR DB/STORE HERE.
+    This is only a stub with logging.
+    """
+    log.info(f"[CREDIT] +{amount} {currency} -> user {user_id}")
+
+
+def notify_user(user_id: int, text: str):
+    """
+    Sends a Telegram message to the user chat if TELEGRAM_BOT_TOKEN is set.
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        log.warning("TELEGRAM_BOT_TOKEN is not set; skipping notify")
         return
     try:
-        with httpx.Client(timeout=10) as c:
-            c.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                data={"chat_id": uid, "text": text},
-            )
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": user_id, "text": text},
+            timeout=5,
+        )
+        if resp.status_code != 200:
+            log.error(f"Telegram notify failed: {resp.status_code} {resp.text}")
+    except Exception as e:
+        log.error(f"Telegram notify exception: {e}")
+
+
+def extract_user_id_from_order(order_id: str) -> Optional[int]:
+    """
+    We use order_id like '{user_id}-{random}', e.g. '244142655-93af1b0c12d3'
+    """
+    try:
+        if "-" in order_id:
+            return int(order_id.split("-", 1)[0])
     except Exception:
-        log.exception("Failed to send Telegram message")
+        pass
+    return None
 
-# ===== Health / Debug =====
-@app.get("/ping")
-def ping():
-    return {"pong": True}
 
-@app.get("/env-check")
-def env_check():
-    return {
-        "API_BUILD": API_BUILD,
-        "DB_PATH": DB_PATH,
-        "CREDIT_PRICE_UAH": CREDIT_PRICE_UAH,
-        "PAYMENTS_API_FILE": inspect.getsourcefile(sys.modules[__name__]),
-    }
+# =========================
+# ROUTES
+# =========================
+@app.get("/health")
+def health():
+    return {"ok": True}
 
-# ===== Створити платіж (LiqPay) =====
+
+@app.get("/thanks", response_class=HTMLResponse)
+def thanks():
+    return HTMLResponse("<h1>Дякуємо! Платіж обробляється.</h1>")
+
+
 @app.post("/api/payments/create")
 async def create_payment(req: Request):
     """
-    Очікує JSON:
-    {
-      "user_id": 12345,
-      "amount": 100,
-      "description": "Top-up …",   # опційно
-      "provider": "liqpay" | "wayforpay"   # тут реалізовано liqpay; інше -> 400
-    }
+    Body:
+      {
+        "user_id": 244142655,
+        "amount": 100,
+        "currency": "UAH",               # optional (default "UAH")
+        "description": "100 UAH topup"   # optional
+      }
+
+    Returns:
+      {
+        "ok": true,
+        "order_id": "...",
+        "checkout_url": "https://www.liqpay.ua/api/3/checkout?...",
+        "data": "...",                   # optional (if you want to render form)
+        "signature": "..."
+      }
     """
     body = await req.json()
-    provider = (body.get("provider") or "liqpay").lower()
-    if provider != "liqpay":
-        raise HTTPException(400, "Only provider=liqpay supported by this API instance")
+    user_id = body.get("user_id")
+    amount = body.get("amount")
+    currency = body.get("currency", "UAH")
+    description = body.get("description")
 
-    user_id = int(body.get("user_id") or 0)
-    amount = float(body.get("amount") or 0)
-    if user_id <= 0 or amount <= 0:
-        raise HTTPException(400, "user_id and amount are required")
+    if user_id is None or amount is None:
+        raise HTTPException(status_code=400, detail="user_id and amount are required")
 
-    currency = body.get("currency") or DEFAULT_CURRENCY
-    description = body.get("description") or f"Top-up {amount:.2f} by {user_id}"
-    order_id = _mk_order_id(user_id)
+    if not LIQPAY_PUBLIC_KEY or not LIQPAY_PRIVATE_KEY:
+        raise HTTPException(status_code=500, detail="LiqPay keys are not configured")
 
-    link = build_checkout_link(
-        amount=amount,
-        currency=currency,
-        description=description,
-        order_id=order_id,
-        result_url=LIQPAY_RESULT_URL or None,
-        server_url=LIQPAY_SERVER_URL or None,
-        language="uk",
-      
-    )
-    resp = {
-        "ok": True,
-        "provider": "liqpay",
-        "order_id": order_id,
-        "data": link["data"],
-        "signature": link["signature"],
-        "checkout_url": link["checkout_url"],
-        "pay_url": link["checkout_url"],
-        "invoiceUrl": link["checkout_url"],
+    if not SERVER_URL or not RESULT_URL:
+        raise HTTPException(status_code=500, detail="SERVER_URL/RESULT_URL are not configured")
+
+    order_id = f"{user_id}-{make_order_id()}"
+    description = description or f"Top-up {amount} by user {user_id}"
+
+    # pass sandbox=1 if you want to force sandbox mode on LiqPay side
+    payload = {
         "public_key": LIQPAY_PUBLIC_KEY,
+        "version": 3,
+        "action": "pay",
+        "amount": amount,
+        "currency": currency,
+        "description": description,
+        "order_id": order_id,
+        "server_url": SERVER_URL,
+        "result_url": RESULT_URL,
+        # "sandbox": 1,  # uncomment to force sandbox payments
     }
-    return JSONResponse(resp)
 
-# ===== Колбек LiqPay (обидві адреси ведуть сюди) =====
-async def _liqpay_callback_core(data: str = Form(""), signature: str = Form("")):
-    # 1) підпис
-    if not data or not signature:
-        return PlainTextResponse("bad request", status_code=400)
-    if not verify_callback_signature(data, signature):
-        log.error("Invalid LiqPay signature")
-        return PlainTextResponse("invalid signature", status_code=400)
+    data_b64 = build_data(payload)
+    signature = sign_data(data_b64)
+    checkout_url = f"https://www.liqpay.ua/api/3/checkout?data={data_b64}&signature={signature}"
 
-    # 2) payload
-    try:
-        payload = json.loads(base64.b64decode(data).decode("utf-8"))
-    except Exception:
-        log.exception("Failed to decode LiqPay payload")
-        return PlainTextResponse("bad payload", status_code=400)
+    log.info(f"Created payment: order_id={order_id} amount={amount} {currency} user={user_id}")
 
-    log.info("LiqPay callback OK: %r", payload)
+    return JSONResponse(
+        {
+            "ok": True,
+            "order_id": order_id,
+            "checkout_url": checkout_url,
+            "data": data_b64,       # if front wants to render a <form> POST to /api/3/checkout
+            "signature": signature,
+        }
+    )
 
-    status = (payload.get("status") or "").lower()
-    if status not in {"success", "sandbox", "subscribed"}:
-        return PlainTextResponse("ignored", status_code=200)
-
-    # 3) uid: 1) info  2) order_id "<uid>-..."  3) desc "... by <uid>"
-    import re
-    uid = None
-
-    info = (payload.get("info") or "").strip()
-    if info.isdigit():
-        uid = int(info)
-
-    order_id = (payload.get("order_id") or "").strip()
-    if uid is None and "-" in order_id:
-        pref = order_id.split("-", 1)[0]
-        if pref.isdigit():
-            uid = int(pref)
-
-    desc = (payload.get("description") or "").strip()
-    if uid is None:
-        m = re.search(r"\bby\s+(\d+)\b", desc)
-        if m:
-            uid = int(m.group(1))
-
-    log.info("LiqPay parsed uid=%r | info=%r | order_id=%r | desc=%r", uid, info, order_id, desc)
-
-    if not uid:
-        log.error("Callback without valid user_id (info): %r | order_id=%r | info=%r", desc, order_id, info)
-        return PlainTextResponse("ok", status_code=200)
-
-    # 4) нарахування
-    try:
-        amount = float(payload.get("amount", 0))
-    except Exception:
-        amount = 0.0
-    credits = _credit_user(uid, amount)
-    new_balance = _get_balance(uid)
-
-    # 5) нотиф юзеру
-    msg = f"💳 Оплата успішна!\nНараховано: +{credits} кредит(и)\nСума: {amount:.2f} {payload.get('currency','UAH')}"
-    if new_balance is not None:
-        msg += f"\nПоточний баланс: {new_balance}"
-    _notify_user(uid, msg)
-
-    return PlainTextResponse("ok", status_code=200)
-
-@app.post("/api/payments/liqpay/callback")
-async def liqpay_callback_full(data: str = Form(""), signature: str = Form("")):
-    return await _liqpay_callback_core(data, signature)
 
 @app.post("/liqpay/callback")
-async def liqpay_callback_short(data: str = Form(""), signature: str = Form("")):
-    return await _liqpay_callback_core(data, signature)
+async def liqpay_callback(req: Request):
+    """
+    LiqPay sends form-data with fields 'data' and 'signature'
+    Docs: signature = base64( sha1( PRIVATE_KEY + data + PRIVATE_KEY ) )
+    """
+    form = await req.form()
+    data_b64 = form.get("data")
+    signature = form.get("signature")
+
+    if not data_b64 or not signature:
+        raise HTTPException(status_code=400, detail="No data/signature")
+
+    if not verify_signature(data_b64, signature):
+        raise HTTPException(status_code=400, detail="Bad signature")
+
+    try:
+        payload = json.loads(base64.b64decode(data_b64).decode("utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Bad payload: {e}")
+
+    # Extract important fields
+    status = payload.get("status")          # success / sandbox / failure / wait_secure / processing ...
+    action = payload.get("action")          # pay / hold / subscribe ...
+    order_id = payload.get("order_id", "")
+    currency = payload.get("currency", "UAH")
+    amount = float(payload.get("amount", 0) or 0)
+
+    # tx id can be in different fields depending on flow
+    transaction_id = (
+        payload.get("transaction_id")
+        or payload.get("payment_id")
+        or payload.get("liqpay_order_id")
+    )
+
+    log.info(f"[CALLBACK] action={action} status={status} order_id={order_id} amount={amount} {currency} tx={transaction_id}")
+
+    # Idempotency
+    if has_processed(transaction_id):
+        return {"ok": True}
+
+    # Extract user_id
+    user_id = extract_user_id_from_order(order_id)
+    if not user_id:
+        # fallback: try description/info
+        info = payload.get("info") or payload.get("description") or ""
+        m = re.search(r"\b(\d{6,})\b", info)
+        if m:
+            try:
+                user_id = int(m.group(1))
+            except Exception:
+                user_id = None
+
+    # Decide if we treat it as success
+    success_statuses = {"success"}
+    if TREAT_SANDBOX_SUCCESS:
+        success_statuses.add("sandbox")
+
+    if action == "pay" and status in success_statuses and amount > 0:
+        if not user_id:
+            # Do not throw 4xx here to avoid infinite retries by LiqPay
+            log.error(f"[CALLBACK] Missing user_id for order_id={order_id}; payload info={payload.get('info')}")
+            return {"ok": True}
+
+        # 1) Update balance
+        credit_user(user_id, amount, currency)
+
+        # 2) Mark processed
+        mark_processed(transaction_id)
+
+        # 3) Notify
+        notify_user(user_id, f"✅ Рахунок поповнено: +{amount} {currency}\nЗамовлення: {order_id}")
+
+        return {"ok": True}
+
+    # Other statuses: acknowledge
+    return {"ok": True}
