@@ -180,8 +180,20 @@ async def liqpay_callback(req: Request):
 @app.get("/thanks", response_class=HTMLResponse)
 async def thanks_page():
     return """
-    <html><body style="font-family:system-ui">
-      <h1>✅ Оплату отримано</h1>
-      <p>Дякуємо! Тепер можете повернутися в бот.</p>
-    </body></html>
+ <html>
+          <head>
+            <meta http-equiv="refresh" content="0; url={dest}">
+            <title>Оплату отримано</title>
+            <script>
+              // дублюємо редірект на випадок, якщо meta не спрацює
+              window.location.replace("{dest}");
+              setTimeout(function(){{ window.location.href="{dest}"; }}, 1500);
+            </script>
+          </head>
+          <body style="font-family: system-ui; text-align:center; padding:40px">
+            <h1>✅ Оплату отримано</h1>
+            <p>Зараз повернемо вас у бот… Якщо не перекинуло автоматично, натисніть:</p>
+            <p><a href="{dest}" style="display:inline-block;padding:12px 20px;border-radius:8px;background:#16a34a;color:#fff;text-decoration:none">Повернутись у бот</a></p>
+          </body>
+        </html>
     """
