@@ -46,8 +46,8 @@ DFS_BASE = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
 
 # внутрішній бекенд (локальний API)
 BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8001").rstrip("/")
-# публічний домен (на всяк випадок для /pay/{order_id} як fallback)
-PUBLIC_BASE  = os.getenv("PUBLIC_BASE", "https://server1.seoswiss.online").rstrip("/")
+# публічний домен (для редіректу /pay/{order_id} як запасний варіант)
+PUBLIC_BASE = os.getenv("PUBLIC_BASE", "https://server1.seoswiss.online").rstrip("/")
 
 CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
 BACKLINKS_CHARGE_UAH = float(os.getenv("BACKLINKS_CHARGE_UAH", "5"))
@@ -264,11 +264,15 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             body = getattr(e.response, "text", "")[:400]
             return await query.edit_message_text(f"Помилка створення платежу: {e}\n{body}")
 
-        # Пріоритет — прямий LiqPay URL з API (варіант A)
+        # ===== Формування pay_url =====
         pay_url = resp.get("pay_url") or resp.get("invoiceUrl")
         order_id = resp.get("order_id")
 
-        # Резервний варіант: якщо pay_url не прийшов, але є order_id — дамо публічний редірект
+        # Якщо API віддав data+signature — самі збираємо checkout URL
+        if not pay_url and resp.get("data") and resp.get("signature"):
+            pay_url = f"https://www.liqpay.ua/api/3/checkout?data={resp['data']}&signature={resp['signature']}"
+
+        # Резервний варіант: /pay/{order_id} на публічному домені
         if not pay_url and order_id:
             pay_url = f"{PUBLIC_BASE}/pay/{order_id}"
 
@@ -344,7 +348,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.exception("Unexpected error")
         await query.edit_message_text(f"Помилка: {e}")
 
-# ====== Обробка натискань по меню (reply keyboard) ======
+# ====== Обробка меню ======
 async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
