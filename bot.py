@@ -17,7 +17,7 @@ from telegram import (
     InlineKeyboardButton,
     KeyboardButton,
     ReplyKeyboardMarkup,
-)  
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -38,7 +38,6 @@ log = logging.getLogger("bot")
 
 # ====== ENV ======
 load_dotenv()
-# ====== ENV ======
 TELEGRAM_BOT_URL     = os.getenv("TELEGRAM_BOT_URL", "")        # наприклад: https://t.me/YourBotName
 TELEGRAM_START_PARAM = os.getenv("TELEGRAM_START_PARAM", "paid") # опціонально
 
@@ -127,6 +126,15 @@ def _uah_to_credits(amount_uah: float) -> int:
 def _registered(uid: int) -> bool:
     return bool(get_phone(uid))
 
+# ====== Хелпер: клавіатура сум поповнення (LiqPay) ======
+def _build_topup_amounts_kb() -> InlineKeyboardMarkup:
+    rows = []
+    for amount in TOPUP_OPTIONS:
+        credits = int(amount // CREDIT_PRICE_UAH)
+        rows.append([InlineKeyboardButton(f"💳 Поповнити {amount}₴ (~{credits} кредитів)", callback_data=f"topup|{amount}")])
+    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="topup_providers")])
+    return InlineKeyboardMarkup(rows)
+
 # ====== /start ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -139,7 +147,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Привіт! Я SEO-бот з балансом.\n\n"
         "Команди/меню:\n"
         "🔗 Backlinks — отримати останні або всі беклінки й CSV\n"
-        "💳 Поповнити — оплата через LiqPay\n"
+        "💳 Поповнити — оплата через LiqPay (інші провайдери — скоро)\n"
         "📊 Баланс — показати ваш баланс\n"
         "📱 Реєстрація — додати телефон (новим — бонус)\n\n"
         f"Статус реєстрації: {reg_text}\n"
@@ -201,17 +209,29 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reg_text = "✅ телефон додано" if _registered(uid) else "❌ немає телефону (використайте Реєстрація)"
     await update.message.reply_text(f"Баланс: {bal} кредитів\nРеєстрація: {reg_text}")
 
-# ====== Поповнення ======
+# ====== Поповнення: вибір провайдера ======
+async def topup_providers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 LiqPay", callback_data="open_liqpay_amounts")],
+        [InlineKeyboardButton("🏦 WayForPay", callback_data="pay_wfp_soon")],
+        [InlineKeyboardButton("🧾 Portmone", callback_data="pay_portmone_soon")],
+    ])
+    text = (
+        "💰 *Поповнення балансу*\n\n"
+        "Оберіть провайдера. WayForPay та Portmone поки що не підключені."
+    )
+    if update.message:
+        await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
+    else:
+        await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+
+# ====== Поповнення: вибір суми (LiqPay) ======
 async def topup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    ensure_user(uid)
-
-    rows = []
-    for amount in TOPUP_OPTIONS:
-        credits = int(amount // CREDIT_PRICE_UAH)
-        rows.append([InlineKeyboardButton(f"💳 Поповнити {amount}₴ (~{credits} кредитів)", callback_data=f"topup|{amount}")])
-
-    await update.message.reply_text("Оберіть суму поповнення:", reply_markup=InlineKeyboardMarkup(rows))
+    # показуємо вибір сум; якщо прийшли з callback — редагуємо поточне повідомлення
+    if update.message:
+        await update.message.reply_text("Оберіть суму поповнення (LiqPay):", reply_markup=_build_topup_amounts_kb())
+    else:
+        await update.callback_query.edit_message_text("Оберіть суму поповнення (LiqPay):", reply_markup=_build_topup_amounts_kb())
 
 # ====== Backlinks ======
 async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -243,7 +263,19 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     data = (query.data or "").split("|")
 
-    # --- Поповнення ---
+    # --- Екран вибору провайдера / повернення назад ---
+    if data[0] == "topup_providers":
+        return await topup_providers(update, context)
+
+    # --- Відкрити суми LiqPay ---
+    if data[0] == "open_liqpay_amounts":
+        return await topup(update, context)
+
+    # --- Пусті кнопки провайдерів ---
+    if data[0] in ("pay_wfp_soon", "pay_portmone_soon"):
+        return await query.answer("Ще не підключено", show_alert=False)
+
+    # --- Поповнення через LiqPay (існуюча логіка створення платежу) ---
     if data[0] == "topup":
         try:
             amount_uah = int(data[1])
@@ -359,7 +391,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🔗 Backlinks":
         return await update.message.reply_text("Введіть команду у форматі: /backlinks yourdomain.com")
     if text == "💳 Поповнити":
-        return await topup(update, context)
+        return await topup_providers(update, context)
     if text == "📊 Баланс":
         return await balance(update, context)
     if text == "📱 Реєстрація":
@@ -396,10 +428,11 @@ def _render_users_page(page: int) -> str:
     return "\n".join(lines)
 
 def _admin_kb(page: int) -> InlineKeyboardMarkup:
-    buttons = [InlineKeyboardButton("↻ Оновити", callback_data=f"admin|page|{page}")]
-    if page > 1:
-        buttons.insert(0, InlineKeyboardButton("⬅️ Назад", callback_data=f"admin|page|{page-1}"))
-    buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"admin|page|{page+1}"))
+    buttons = [InlineKeyboardButton("⬅️ Назад", callback_data=f"admin|page|{page-1}")] if page > 1 else []
+    buttons += [
+        InlineKeyboardButton("↻ Оновити", callback_data=f"admin|page|{page}"),
+        InlineKeyboardButton("Вперед ➡️", callback_data=f"admin|page|{page+1}")
+    ]
     return InlineKeyboardMarkup([buttons])
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -431,7 +464,7 @@ def main():
     # Команди
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance))
-    app.add_handler(CommandHandler("topup", topup))
+    app.add_handler(CommandHandler("topup", topup_providers))  # /topup тепер відкриває вибір провайдера
     app.add_handler(CommandHandler("backlinks", backlinks))
 
     # Реєстрація — розмова
@@ -450,7 +483,7 @@ def main():
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(on_admin_cb, pattern=r"^admin\|"))
 
-    # Callback’и (topup/backlinks)
+    # Callback’и (providers / liqpay amounts / liqpay topup / backlinks)
     app.add_handler(CallbackQueryHandler(on_choice))
 
     # Меню-тексти
