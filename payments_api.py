@@ -179,21 +179,33 @@ async def liqpay_callback(req: Request):
 
 @app.get("/thanks", response_class=HTMLResponse)
 async def thanks_page():
-    return """
- <html>
+    dest = TELEGRAM_BOT_URL.strip()
+    if dest:
+        # додамо ?start=... (або &start=..., якщо вже є параметри)
+        sep = "&" if "?" in dest else "?"
+        dest = f"{dest}{sep}start={TELEGRAM_START_PARAM}"
+        return f"""
+        <html>
           <head>
             <meta http-equiv="refresh" content="0; url={dest}">
             <title>Оплату отримано</title>
             <script>
-              // дублюємо редірект на випадок, якщо meta не спрацює
               window.location.replace("{dest}");
-              setTimeout(function(){{ window.location.href="{dest}"; }}, 1500);
+              setTimeout(function(){{ window.location.href="{dest}"; }}, 1200);
             </script>
           </head>
           <body style="font-family: system-ui; text-align:center; padding:40px">
-            <h1>✅ Оплату отримано</h1> 
+            <h1>✅ Оплату отримано</h1>
             <p>Зараз повернемо вас у бот… Якщо не перекинуло автоматично, натисніть:</p>
             <p><a href="{dest}" style="display:inline-block;padding:12px 20px;border-radius:8px;background:#16a34a;color:#fff;text-decoration:none">Повернутись у бот</a></p>
           </body>
         </html>
+        """
+    # fallback, якщо TELEGRAM_BOT_URL не задано
+    return """
+    <html><body style="font-family:system-ui; text-align:center; padding:40px">
+      <h1>✅ Оплату отримано</h1>
+      <p>Тепер можете повернутися в бот.</p>
+    </body></html>
     """
+

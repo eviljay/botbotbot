@@ -38,6 +38,9 @@ log = logging.getLogger("bot")
 
 # ====== ENV ======
 load_dotenv()
+# ====== ENV ======
+TELEGRAM_BOT_URL     = os.getenv("TELEGRAM_BOT_URL", "")        # наприклад: https://t.me/YourBotName
+TELEGRAM_START_PARAM = os.getenv("TELEGRAM_START_PARAM", "paid") # опціонально
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 DFS_LOGIN = os.environ["DATAFORSEO_LOGIN"]
