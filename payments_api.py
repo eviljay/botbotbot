@@ -1,102 +1,130 @@
+# payments_api.py
 import os
-import uuid
+import json
+import base64
+import hashlib
 import logging
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, HTMLResponse
+
+import httpx
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
-# === INIT ===
-load_dotenv()
+# ====== Логи ======
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("payments-api")
 
+# ====== ENV ======
+load_dotenv()
+
+PUBLIC_KEY = os.getenv("LIQPAY_PUBLIC_KEY", "")
+PRIVATE_KEY = os.getenv("LIQPAY_PRIVATE_KEY", "")
+RESULT_URL = os.getenv("LIQPAY_RESULT_URL", "")   # https://<твой-домен>/thanks
+SERVER_URL = os.getenv("LIQPAY_SERVER_URL", "")   # https://<твой-домен>/liqpay/callback
+
+if not PUBLIC_KEY or not PRIVATE_KEY:
+    raise RuntimeError("Need LIQPAY_PUBLIC_KEY and LIQPAY_PRIVATE_KEY in .env")
+
 app = FastAPI(title="Payments API (LiqPay)")
 
-# === LiqPay utils (твій готовий модуль) ===
-from payments.liqpay_utils import build_data, sign, PUBLIC_KEY
-from dao import charge  # твоя функція для зарахування кредитів
+# ====== Утиліти ======
+def liqpay_encode(payload: dict) -> str:
+    b = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    return base64.b64encode(b).decode()
 
-# URLs для LiqPay
-LIQPAY_SERVER_URL = os.getenv("LIQPAY_SERVER_URL", "")
-LIQPAY_RESULT_URL = os.getenv("LIQPAY_RESULT_URL", "")
+def liqpay_sign(data_b64: str) -> str:
+    s = PRIVATE_KEY + data_b64 + PRIVATE_KEY
+    return base64.b64encode(hashlib.sha1(s.encode()).digest()).decode()
 
-
-def make_liqpay_order_id() -> str:
-    """Генерує унікальний order_id для LiqPay"""
-    return uuid.uuid4().hex[:12]
-
-
-# === 1. Створення платежу (бот звертається сюди) ===
+# ====== API ======
 @app.post("/api/payments/create")
 async def create_payment(req: Request):
     """
-    Створює платіж LiqPay і повертає data + signature для checkout.
+    Створення платежу
+    Body:
+    {
+      "user_id": 244142655,
+      "amount": 100,
+      "currency": "UAH" (optional)
+    }
     """
     body = await req.json()
     user_id = body.get("user_id")
-    if not user_id:
-        return JSONResponse({"ok": False, "error": "user_id required"}, status_code=400)
-
-    amount = float(body.get("amount", 0))
-    if amount <= 0:
-        return JSONResponse({"ok": False, "error": "amount must be > 0"}, status_code=400)
-
+    amount = body.get("amount")
     currency = body.get("currency", "UAH")
-    description = body.get("description", f"Top-up {int(amount)} credits")
-    order_id = make_liqpay_order_id()
+
+    if not user_id or not amount:
+        raise HTTPException(400, "user_id and amount required")
 
     payload = {
-        "public_key": PUBLIC_KEY,
         "version": "3",
+        "public_key": PUBLIC_KEY,
         "action": "pay",
-        "amount": f"{amount:.2f}",
+        "amount": str(amount),
         "currency": currency,
-        "description": description,
-        "order_id": order_id,
-        "server_url": LIQPAY_SERVER_URL,
-        "result_url": LIQPAY_RESULT_URL,
+        "description": f"Top-up {amount} UAH for {user_id}",
+        "result_url": RESULT_URL,
+        "server_url": SERVER_URL,
+        "order_id": f"{user_id}-{os.urandom(4).hex()}",
     }
 
-    data = build_data(payload)
-    signature = sign(data)
+    data_b64 = liqpay_encode(payload)
+    signature = liqpay_sign(data_b64)
 
-    return {
+    # робимо запит до LiqPay API
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.post("https://www.liqpay.ua/api/request", json={
+            "data": data_b64,
+            "signature": signature,
+        })
+        try:
+            r.raise_for_status()
+        except Exception as e:
+            log.error("LiqPay API error: %s", r.text)
+            raise HTTPException(502, f"LiqPay API error: {e}")
+
+        resp = r.json()
+
+    log.info("LiqPay resp: %s", resp)
+
+    pay_url = resp.get("href")
+    if not pay_url:
+        raise HTTPException(502, f"LiqPay did not return href: {resp}")
+
+    return JSONResponse({
         "ok": True,
-        "provider": "liqpay",
-        "order_id": order_id,
-        "data": data,
-        "signature": signature
-    }
+        "pay_url": pay_url,
+        "order_id": payload["order_id"],
+    })
 
-
-# === 2. Callback від LiqPay ===
 @app.post("/liqpay/callback")
 async def liqpay_callback(req: Request):
-    """
-    LiqPay надсилає data + signature (base64).
-    Тут треба перевірити підпис і зарахувати кредити.
-    """
-    try:
-        body = await req.json()
-    except Exception:
-        body = await req.form()
+    """Обробка callback від LiqPay (сервер-сервер)."""
+    data = (await req.form()).get("data")
+    signature = (await req.form()).get("signature")
+    if not data or not signature:
+        raise HTTPException(400, "Missing data or signature")
 
-    log.info(f"LiqPay callback: {dict(body)}")
+    # перевірка підпису
+    expected = liqpay_sign(data)
+    if expected != signature:
+        raise HTTPException(400, "Invalid signature")
 
-    # TODO: тут розпарсити `body["data"]`, перевірити підпис через sign()
-    # Наприклад:
-    # decoded = decode_data(body["data"])
-    # if body["signature"] == sign(body["data"]) and decoded["status"] == "success":
-    #     user_id = ...  # треба визначити з order_id чи description
-    #     charge(user_id, int(decoded["amount"]))
+    payload = json.loads(base64.b64decode(data).decode("utf-8"))
+    log.info("Callback payload: %s", payload)
+    # TODO: оновити баланс у БД
 
     return JSONResponse({"ok": True})
 
-@app.get("/thanks", response_class=HTMLResponse)
-async def thanks():
-    return """
-    <html><body style="font-family:system-ui">
-      <h1>✅ Оплату отримано</h1>
-      <p>Дякуємо! Тепер можете повернутися в бот.</p>
-    </body></html>
-    """
+@app.get("/thanks")
+async def thanks_page():
+    return HTML_OK
+
+
+# ====== HTML для result_url ======
+HTML_OK = """
+<html><body style="font-family:system-ui">
+  <h1>✅ Оплату отримано</h1>
+  <p>Дякуємо! Тепер можете повернутися в бот.</p>
+</body></html>
+"""
