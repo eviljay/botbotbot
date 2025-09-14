@@ -177,35 +177,42 @@ async def liqpay_callback(req: Request):
 
     return JSONResponse({"ok": True})
 
+from fastapi.responses import RedirectResponse, HTMLResponse  # впевнись що імпорт є
+
 @app.get("/thanks", response_class=HTMLResponse)
 async def thanks_page():
-    dest = TELEGRAM_BOT_URL.strip()
-    if dest:
-        # додамо ?start=... (або &start=..., якщо вже є параметри)
-        sep = "&" if "?" in dest else "?"
-        dest = f"{dest}{sep}start={TELEGRAM_START_PARAM}"
-        return f"""
-        <html>
-          <head>
-            <meta http-equiv="refresh" content="0; url={dest}">
-            <title>Оплату отримано</title>
-            <script>
-              window.location.replace("{dest}");
-              setTimeout(function(){{ window.location.href="{dest}"; }}, 1200);
-            </script>
-          </head>
-          <body style="font-family: system-ui; text-align:center; padding:40px">
-            <h1>✅ Оплату отримано</h1>
-            <p>Зараз повернемо вас у бот… Якщо не перекинуло автоматично, натисніть:</p>
-            <p><a href="{dest}" style="display:inline-block;padding:12px 20px;border-radius:8px;background:#16a34a;color:#fff;text-decoration:none">Повернутись у бот</a></p>
-          </body>
-        </html>
-        """
-    # fallback, якщо TELEGRAM_BOT_URL не задано
-    return """
-    <html><body style="font-family:system-ui; text-align:center; padding:40px">
-      <h1>✅ Оплату отримано</h1>
-      <p>Тепер можете повернутися в бот.</p>
-    </body></html>
-    """
+    try:
+        bot_url = (os.getenv("TELEGRAM_BOT_URL") or "").strip()
+        start_param = os.getenv("TELEGRAM_START_PARAM", "paid")
+
+        # Якщо задано посилання на бота — робимо 302 редірект (працює і в браузері, і в curl)
+        if bot_url:
+            sep = "&" if "?" in bot_url else "?"
+            dest = f"{bot_url}{sep}start={start_param}"
+            log.info("THANKS redirect -> %s", dest)
+            return RedirectResponse(dest, status_code=302)
+
+        # Інакше — просто сторінка-подяка (fallback)
+        return HTMLResponse(
+            """
+            <html><body style="font-family:system-ui; text-align:center; padding:40px">
+              <h1>✅ Оплату отримано</h1>
+              <p>Тепер можете повернутися в бот.</p>
+            </body></html>
+            """,
+            status_code=200,
+        )
+    except Exception:
+        log.exception("/thanks failed")
+        # не ламаємося 500-кою; покажемо fallback-сторінку
+        return HTMLResponse(
+            """
+            <html><body style="font-family:system-ui; text-align:center; padding:40px">
+              <h1>✅ Оплату отримано</h1>
+              <p>(fallback) Поверніться в бот вручну.</p>
+            </body></html>
+            """,
+            status_code=200,
+        )
+
 
