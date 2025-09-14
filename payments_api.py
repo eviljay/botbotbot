@@ -191,7 +191,7 @@ async def thanks_page():
             </script>
           </head>
           <body style="font-family: system-ui; text-align:center; padding:40px">
-            <h1>✅ Оплату отримано</h1>
+            <h1>✅ Оплату отримано</h1> 
             <p>Зараз повернемо вас у бот… Якщо не перекинуло автоматично, натисніть:</p>
             <p><a href="{dest}" style="display:inline-block;padding:12px 20px;border-radius:8px;background:#16a34a;color:#fff;text-decoration:none">Повернутись у бот</a></p>
           </body>
