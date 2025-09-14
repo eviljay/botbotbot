@@ -43,7 +43,10 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 DFS_LOGIN = os.environ["DATAFORSEO_LOGIN"]
 DFS_PASS = os.environ["DATAFORSEO_PASSWORD"]
 DFS_BASE = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
+# внутрішній бекенд (API на 127.0.0.1)
 BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8001").rstrip("/")
+# публічний домен (для кнопок користувачам)
+PUBLIC_BASE  = os.getenv("PUBLIC_BASE", "https://server1.seoswiss.online").rstrip("/")
 
 CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
 BACKLINKS_CHARGE_UAH = float(os.getenv("BACKLINKS_CHARGE_UAH", "5"))
@@ -263,7 +266,8 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Пріоритет — прямий LiqPay URL
         pay_url = resp.get("invoiceUrl") or resp.get("pay_url")
         if not pay_url and resp.get("order_id"):
-            pay_url = f"{BACKEND_BASE}/pay/{resp['order_id']}"
+            # ВАЖЛИВО: у кнопках використовуємо ПУБЛІЧНИЙ домен
+            pay_url = f"{PUBLIC_BASE}/pay/{resp['order_id']}"
 
         if not pay_url:
             preview = (str(resp)[:400]).replace("\n", " ")
@@ -442,7 +446,7 @@ def main():
     # Меню-тексти
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_menu_text))
 
-    log.info("Bot started. DFS_BASE=%s BACKEND_BASE=%s", DFS_BASE, BACKEND_BASE)
+    log.info("Bot started. DFS_BASE=%s BACKEND_BASE=%s PUBLIC_BASE=%s", DFS_BASE, BACKEND_BASE, PUBLIC_BASE)
     app.run_polling(close_loop=False)
 
 if __name__ == "__main__":
