@@ -33,7 +33,7 @@ from dao import init_db, ensure_user, get_balance, charge, get_phone, register_o
 from dataforseo import DataForSEO
 
 # ====== Логи ======
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("bot")
 
 # ====== ENV ======
@@ -43,9 +43,10 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 DFS_LOGIN = os.environ["DATAFORSEO_LOGIN"]
 DFS_PASS = os.environ["DATAFORSEO_PASSWORD"]
 DFS_BASE = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
-# внутрішній бекенд (API на 127.0.0.1)
+
+# внутрішній бекенд (локальний API)
 BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8001").rstrip("/")
-# публічний домен (для кнопок користувачам)
+# публічний домен (на всяк випадок для /pay/{order_id} як fallback)
 PUBLIC_BASE  = os.getenv("PUBLIC_BASE", "https://server1.seoswiss.online").rstrip("/")
 
 CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
@@ -263,20 +264,23 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             body = getattr(e.response, "text", "")[:400]
             return await query.edit_message_text(f"Помилка створення платежу: {e}\n{body}")
 
-        # Пріоритет — прямий LiqPay URL
-        pay_url = resp.get("invoiceUrl") or resp.get("pay_url")
-        if not pay_url and resp.get("order_id"):
-            # ВАЖЛИВО: у кнопках використовуємо ПУБЛІЧНИЙ домен
-            pay_url = f"{PUBLIC_BASE}/pay/{resp['order_id']}"
+        # Пріоритет — прямий LiqPay URL з API (варіант A)
+        pay_url = resp.get("pay_url") or resp.get("invoiceUrl")
+        order_id = resp.get("order_id")
+
+        # Резервний варіант: якщо pay_url не прийшов, але є order_id — дамо публічний редірект
+        if not pay_url and order_id:
+            pay_url = f"{PUBLIC_BASE}/pay/{order_id}"
 
         if not pay_url:
             preview = (str(resp)[:400]).replace("\n", " ")
+            log.error("No pay_url returned. Resp=%s", resp)
             return await query.edit_message_text(
                 "Не отримав посилання на оплату. "
                 f"Відповідь бекенду: {preview}"
             )
 
-        # Надсилаємо НОВЕ повідомлення з кнопкою + дублюємо URL текстом
+        log.info("Sending pay_url to user %s: %s (order_id=%s)", uid, pay_url, order_id)
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Оплатити (LiqPay)", url=pay_url)]])
         await context.bot.send_message(
             chat_id=uid,
@@ -284,7 +288,6 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   f"Тисни кнопку нижче або відкрий лінк вручну:\n{pay_url}"),
             reply_markup=kb
         )
-        # Попереднє повідомлення акуратно оновимо
         try:
             await query.edit_message_text("Рахунок створено, дивись наступне повідомлення з кнопкою.")
         except Exception:
