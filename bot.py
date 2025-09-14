@@ -46,8 +46,8 @@ DFS_BASE = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
 
 # внутрішній бекенд (локальний API)
 BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8001").rstrip("/")
-# публічний домен (для редіректу /pay/{order_id} як запасний варіант)
-PUBLIC_BASE = os.getenv("PUBLIC_BASE", "https://server1.seoswiss.online").rstrip("/")
+# публічний домен (на випадок, якщо колись доведеться дати /pay/{order_id})
+PUBLIC_BASE  = os.getenv("PUBLIC_BASE", "https://server1.seoswiss.online").rstrip("/")
 
 CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
 BACKLINKS_CHARGE_UAH = float(os.getenv("BACKLINKS_CHARGE_UAH", "5"))
