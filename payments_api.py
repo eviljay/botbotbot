@@ -92,8 +92,11 @@ async def liqpay_callback(req: Request):
 
     return JSONResponse({"ok": True})
 
-
-# === 3. Сторінка після оплати ===
-@app.get("/thanks")
+@app.get("/thanks", response_class=HTMLResponse)
 async def thanks():
-    return HTMLResponse("<h1>Дякуємо!</h1><p>Оплата обробляється. Можна повернутися у бот і перевірити баланс.</p>")
+    return """
+    <html><body style="font-family:system-ui">
+      <h1>✅ Оплату отримано</h1>
+      <p>Дякуємо! Тепер можете повернутися в бот.</p>
+    </body></html>
+    """
