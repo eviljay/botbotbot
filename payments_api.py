@@ -17,11 +17,9 @@ from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
 from dotenv import load_dotenv
 import httpx
 
-# ====== Логи ======
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("payments-api")
 
-# ====== ENV ======
 load_dotenv()
 
 def _env(name: str, default: str = "") -> str:
@@ -39,19 +37,16 @@ WFP_MERCHANT_ACCOUNT = _env("WFP_MERCHANT_ACCOUNT") or _env("WFP_ACCOUNT")
 WFP_MERCHANT_DOMAIN  = _env("WFP_MERCHANT_DOMAIN") or _env("WFP_DOMAIN")
 WFP_SECRET_KEY       = _env("WFP_SECRET_KEY")
 WFP_API_URL          = _env("WFP_API_URL") or "https://api.wayforpay.com/api"
-WFP_SERVICE_URL      = _env("WFP_SERVICE_URL")  # https://<host>/wayforpay/callback
+WFP_SERVICE_URL      = _env("WFP_SERVICE_URL")
 
-# Загальні
 DEFAULT_CCY        = _env("LIQPAY_CURRENCY", "UAH").upper()
 TELEGRAM_BOT_TOKEN = _env("TELEGRAM_BOT_TOKEN")
 DB_PATH            = _env("DB_PATH", "bot.db")
 CREDIT_PRICE_UAH   = float(_env("CREDIT_PRICE_UAH", "5"))
 
-# ====== FastAPI ======
 app = FastAPI(title="Payments API (LiqPay + WayForPay)")
 ORDER_CACHE: dict[str, str] = {}
 
-# ====== DB ======
 def _db():
     return sqlite3.connect(DB_PATH)
 
@@ -69,8 +64,7 @@ def _init_db():
             user_id INTEGER PRIMARY KEY,
             balance INTEGER NOT NULL DEFAULT 0,
             phone   TEXT
-        )
-        """)
+        )""")
         conn.execute("""
         CREATE TABLE IF NOT EXISTS payments (
             order_id   TEXT PRIMARY KEY,
@@ -82,8 +76,7 @@ def _init_db():
             status     TEXT NOT NULL,
             raw        TEXT,
             created_at TEXT NOT NULL
-        )
-        """)
+        )""")
         cols = _table_columns(conn, "payments")
         if "order_id" not in cols:
             conn.execute("ALTER TABLE payments ADD COLUMN order_id TEXT")
@@ -98,10 +91,9 @@ def _init_db():
         if "phone" not in ucols:
             conn.execute("ALTER TABLE users ADD COLUMN phone TEXT")
         conn.commit()
-
 _init_db()
 
-# ====== LiqPay ======
+# ===== LiqPay =====
 def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode("utf-8")
 
@@ -117,7 +109,7 @@ def _liqpay_sign(data_b64: str) -> str:
 def _gen_order_id(user_id) -> str:
     return f"{user_id}-{os.urandom(6).hex()}"
 
-# ====== WayForPay ======
+# ===== WayForPay =====
 def _host_from_url(url: str) -> str:
     if not url:
         return ""
@@ -135,12 +127,26 @@ def _wfp_clean_domain(raw: str) -> str:
     return host
 
 def _wfp_resolve_domain() -> str:
-    # Порядок пріоритету: WFP_MERCHANT_DOMAIN -> WFP_DOMAIN -> хост із WFP_SERVICE_URL
     for candidate in (WFP_MERCHANT_DOMAIN, _env("WFP_DOMAIN"), WFP_SERVICE_URL):
         host = _wfp_clean_domain(candidate or "")
         if host:
             return host
     return ""
+
+def _wfp_amount_str(amount_f: float) -> str:
+    """
+    ВАЖЛИВО: для підпису WayForPay amount/price треба без зайвих нулів.
+    100.0 -> "100", 100.50 -> "100.5", 100.25 -> "100.25"
+    """
+    dec = Decimal(str(amount_f)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    # .normalize() прибере зайві нулі та крапку для цілих
+    s = format(dec.normalize(), 'f')
+    # але обмежимо до 2 знаків після крапки (WFP — валюта)
+    if "." in s:
+        whole, frac = s.split(".", 1)
+        frac = frac[:2].rstrip("0")
+        s = whole if frac == "" else f"{whole}.{frac}"
+    return s
 
 def _wfp_build_create_sign_message(merchantAccount: str, merchantDomainName: str,
                                    orderReference: str, orderDate: int,
@@ -196,7 +202,7 @@ def _wfp_response_signature(orderReference: str, status: str, time_int: int) -> 
     msg = ";".join([orderReference, status, str(time_int)])
     return _wfp_hmac_md5(msg)
 
-# ====== Helpers ======
+# ===== Helpers =====
 def _credit_amount_to_credits(amount_uah: float) -> int:
     return max(1, math.ceil(amount_uah / CREDIT_PRICE_UAH))
 
@@ -238,31 +244,11 @@ def _insert_or_update_payment(conn: sqlite3.Connection, order_id: str, provider:
     conn.execute("UPDATE payments SET raw = ? WHERE order_id = ?", (json.dumps(raw, ensure_ascii=False), order_id))
     return False
 
-# ====== API ======
+# ===== API =====
 @app.get("/health")
 async def health():
     resolved_domain = _wfp_resolve_domain()
     return {"ok": True, "time": _utc_now_iso(), "wfp_domain": resolved_domain or None, "wfp_account": WFP_MERCHANT_ACCOUNT or None}
-
-@app.get("/debug/wfp-sign")
-async def debug_wfp_sign():
-    """Повертає зразок sign_message та signature для швидкої перевірки."""
-    mdomain = _wfp_resolve_domain()
-    if not (WFP_MERCHANT_ACCOUNT and mdomain and WFP_SECRET_KEY):
-        raise HTTPException(500, "WayForPay is not configured")
-    order_id = f"debug-{int(time.time())}"
-    order_ts = int(time.time())
-    amt_dec = Decimal("100").quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    amount_for_sign = f"{amt_dec:.2f}"                 # "100.00"
-    product_names    = ["Top-up credits"]
-    product_counts   = [1]
-    product_prices_s = [amount_for_sign]               # ["100.00"]
-    msg, sig = _wfp_make_create_signature(
-        WFP_MERCHANT_ACCOUNT, mdomain, order_id, order_ts,
-        amount_for_sign, DEFAULT_CCY,
-        product_names, product_counts, product_prices_s
-    )
-    return {"merchantAccount": WFP_MERCHANT_ACCOUNT, "merchantDomainName": mdomain, "orderReference": order_id, "orderDate": order_ts, "amount_str": amount_for_sign, "currency": DEFAULT_CCY, "productName": product_names, "productCount": product_counts, "productPrice_str": product_prices_s, "sign_message": msg, "signature": sig}
 
 @app.post("/api/payments/create")
 async def create_payment(req: Request):
@@ -282,7 +268,6 @@ async def create_payment(req: Request):
 
     order_id = str(body.get("order_id") or _gen_order_id(user_id))
 
-    # LiqPay
     if provider == "liqpay":
         if not (LIQPAY_PUBLIC_KEY and LIQPAY_PRIVATE_KEY and LIQPAY_SERVER_URL and LIQPAY_RESULT_URL):
             raise HTTPException(500, "LiqPay is not configured")
@@ -308,28 +293,31 @@ async def create_payment(req: Request):
         log.info("Create payment [LiqPay]: user=%s amount=%.2f %s order_id=%s", user_id, amount_f, currency, order_id)
         return JSONResponse({"ok": True, "provider": "liqpay", "order_id": order_id, "pay_url": pay_url})
 
-    # WayForPay
     elif provider in ("wayforpay", "wfp"):
         mdomain = _wfp_resolve_domain()
         if not (WFP_MERCHANT_ACCOUNT and mdomain and WFP_SECRET_KEY):
             raise HTTPException(500, "WayForPay is not configured")
-        # рекомендується ставити КОРЕНЕВИЙ домен із кабінету, напр. 'seoswiss.online'
         if not re.fullmatch(r"[a-z0-9.-]+", mdomain) or mdomain.count(".") < 1:
             raise HTTPException(500, f"Invalid WFP_MERCHANT_DOMAIN='{mdomain}'. Use bare host like 'seoswiss.online'")
 
         order_ts = int(time.time())
-        amt_dec = Decimal(str(amount_f)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        amount_for_sign  = f"{amt_dec:.2f}"          # "100.00"
+
+        amount_for_sign = _wfp_amount_str(amount_f)     # <-- головна зміна
         product_names    = ["Top-up credits"]
         product_counts   = [1]
-        product_prices_s = [amount_for_sign]         # ["100.00"]
+        product_prices_s = [amount_for_sign]            # <-- і тут підписуємо тим самим рядком
 
         sign_msg, signature = _wfp_make_create_signature(
             WFP_MERCHANT_ACCOUNT, mdomain, order_id, order_ts,
             amount_for_sign, currency, product_names, product_counts, product_prices_s
         )
-        # важливо: бачимо, ЩО саме підписуємо
         log.warning("WFP sign: domain='%s' msg='%s' sig='%s'", mdomain, sign_msg, signature)
+
+        # у самому JSON можна залишити числа (їм все одно), головне — правильний підпис
+        try:
+            amt_num = float(Decimal(amount_for_sign))
+        except Exception:
+            amt_num = amount_f
 
         req_payload = {
             "transactionType": "CREATE_INVOICE",
@@ -341,10 +329,10 @@ async def create_payment(req: Request):
             "serviceUrl": (WFP_SERVICE_URL or None),
             "orderReference": order_id,
             "orderDate": order_ts,
-            "amount": float(amt_dec),                  # 100.0
+            "amount": amt_num,
             "currency": currency,
             "productName": product_names,
-            "productPrice": [float(amt_dec)],         # [100.0]
+            "productPrice": [amt_num],
             "productCount": product_counts,
         }
         req_payload = {k: v for k, v in req_payload.items() if v is not None}
@@ -380,7 +368,6 @@ async def pay_redirect(order_id: str):
         raise HTTPException(404, "Unknown order_id")
     return RedirectResponse(pay_url, status_code=302)
 
-# ====== LiqPay callback ======
 @app.post("/liqpay/callback")
 async def liqpay_callback(req: Request):
     form = await req.form()
@@ -416,7 +403,6 @@ async def liqpay_callback(req: Request):
         await _notify_user_tg(user_id, f"✅ Оплату отримано: +{amount:.0f}₴ → +{_credit_amount_to_credits(amount)} кредит(и). Дякуємо!")
     return JSONResponse({"ok": True})
 
-# ====== WayForPay callback ======
 @app.post("/wayforpay/callback")
 async def wayforpay_callback(req: Request):
     try:
@@ -480,7 +466,6 @@ async def wayforpay_callback(req: Request):
         await _notify_user_tg(user_id, f"✅ Оплату отримано: +{amount:.0f}₴ → +{_credit_amount_to_credits(amount)} кредит(и). Дякуємо!")
     return JSONResponse(resp)
 
-# ====== THANKS ======
 @app.get("/thanks", response_class=HTMLResponse)
 async def thanks_page():
     try:
