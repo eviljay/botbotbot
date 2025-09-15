@@ -1,6 +1,7 @@
 # bot.py
 import os
 import io
+import re
 import csv
 import math
 import logging
@@ -38,17 +39,15 @@ log = logging.getLogger("bot")
 
 # ====== ENV ======
 load_dotenv()
-TELEGRAM_BOT_URL     = os.getenv("TELEGRAM_BOT_URL", "")        # наприклад: https://t.me/YourBotName
-TELEGRAM_START_PARAM = os.getenv("TELEGRAM_START_PARAM", "paid") # опціонально
+TELEGRAM_BOT_URL     = os.getenv("TELEGRAM_BOT_URL", "")
+TELEGRAM_START_PARAM = os.getenv("TELEGRAM_START_PARAM", "paid")
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 DFS_LOGIN = os.environ["DATAFORSEO_LOGIN"]
 DFS_PASS = os.environ["DATAFORSEO_PASSWORD"]
 DFS_BASE = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
 
-# внутрішній бекенд (локальний API)
 BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8001").rstrip("/")
-# публічний домен (на випадок, якщо колись доведеться дати /pay/{order_id})
 PUBLIC_BASE  = os.getenv("PUBLIC_BASE", "https://server1.seoswiss.online").rstrip("/")
 
 CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
@@ -56,9 +55,8 @@ BACKLINKS_CHARGE_UAH = float(os.getenv("BACKLINKS_CHARGE_UAH", "5"))
 INITIAL_BONUS = int(os.getenv("INITIAL_BONUS", "10"))
 TOPUP_OPTIONS = [int(x.strip()) for x in os.getenv("TOPUP_OPTIONS", "100,250,500").split(",") if x.strip().isdigit()]
 
-# для адмінки
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
-DB_PATH = os.getenv("DB_PATH", "bot.db")  # очікувана БД, яку використовує dao.py
+DB_PATH = os.getenv("DB_PATH", "data/bot.db")
 
 PREVIEW_COUNT = 10
 CSV_MAX = 1000
@@ -127,7 +125,16 @@ def _registered(uid: int) -> bool:
     return bool(get_phone(uid))
 
 def _provider_label(provider: str) -> str:
-    return "LiqPay" if provider == "liqpay" else ("WayForPay" if provider in ("wayforpay", "wfp") else provider)
+    p = provider.lower()
+    if p == "liqpay": return "LiqPay"
+    if p in ("wayforpay", "wfp"): return "WayForPay"
+    return provider
+
+def _parse_amount(s: str) -> Optional[int]:
+    if s is None:
+        return None
+    m = re.search(r"\d+", str(s))
+    return int(m.group(0)) if m else None
 
 # ====== Клавіатури ======
 def _build_topup_amounts_kb(provider: str) -> InlineKeyboardMarkup:
@@ -147,7 +154,6 @@ def _providers_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💳 LiqPay", callback_data="open_amounts|liqpay")],
         [InlineKeyboardButton("🏦 WayForPay", callback_data="open_amounts|wayforpay")],
-        [InlineKeyboardButton("🧾 Portmone (скоро)", callback_data="provider_soon|portmone")],
     ])
 
 # ====== /start ======
@@ -158,7 +164,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reg = _registered(uid)
     reg_text = "✅ телефон додано" if reg else "❌ немає телефону (використайте Реєстрація)"
 
-    # Deep-link /start <param>
     raw = (update.message.text or "").strip()
     param: Optional[str] = None
     if raw.startswith("/start"):
@@ -167,7 +172,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             param = parts[1].strip()
 
     if param == TELEGRAM_START_PARAM:
-        # Повернення з оплати
         await update.message.reply_text(
             "Дякуємо! Якщо платіж пройшов, баланс оновиться протягом хвилини.\n"
             "Перевірте /balance або натисніть «📊 Баланс».",
@@ -178,8 +182,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "Привіт! Я SEO-бот з балансом.\n\n"
         "Команди/меню:\n"
-        "🔗 Backlinks — отримати останні або всі беклінки й CSV\n"
-        "💳 Поповнити — оплата через LiqPay або WayForPay\n"
+        "🔗 Backlinks — останні/всі беклінки + CSV\n"
+        "💳 Поповнити — LiqPay або WayForPay\n"
         "📊 Баланс — показати ваш баланс\n"
         "📱 Реєстрація — додати телефон (новим — бонус)\n\n"
         f"Статус реєстрації: {reg_text}\n"
@@ -241,19 +245,15 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reg_text = "✅ телефон додано" if _registered(uid) else "❌ немає телефону (використайте Реєстрація)"
     await update.message.reply_text(f"Баланс: {bal} кредитів\nРеєстрація: {reg_text}")
 
-# ====== Поповнення: вибір провайдера ======
+# ====== Поповнення ======
 async def topup_providers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = _providers_kb()
-    text = (
-        "💰 *Поповнення балансу*\n\n"
-        "Оберіть провайдера оплати."
-    )
+    text = "💰 *Поповнення балансу*\n\nОберіть провайдера оплати."
     if update.message:
         await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
     else:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
-# ====== Поповнення: вибір суми (для конкретного провайдера) ======
 async def open_amounts(update: Update, context: ContextTypes.DEFAULT_TYPE, provider: str):
     label = _provider_label(provider)
     msg = f"Оберіть суму поповнення ({label}):"
@@ -286,35 +286,36 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-# ====== CALLBACKS (topup & backlinks) ======
+# ====== CALLBACKS ======
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
     data = (query.data or "").split("|")
 
-    # --- Екран вибору провайдера / повернення назад ---
+    # провайдери / назад
     if data[0] == "topup_providers":
         return await topup_providers(update, context)
 
-    # --- Відкрити вибір сум для провайдера ---
     if data[0] == "open_amounts":
         provider = (data[1] if len(data) > 1 else "liqpay").lower()
         return await open_amounts(update, context, provider)
 
-    # --- Пусті або ще не підключені провайдери ---
-    if data[0] == "provider_soon":
-        label = _provider_label(data[1] if len(data) > 1 else "")
-        return await query.answer(f"{label} ще не підключено", show_alert=False)
-
-    # --- Поповнення через обраного провайдера ---
+    # створення інвойсу
     if data[0] == "topup":
-        if len(data) < 3:
-            return await query.edit_message_text("Невірна команда поповнення.")
-        provider = data[1].lower()
-        try:
-            amount_uah = int(data[2])
-        except Exception:
+        # підтримуємо:
+        #  • topup|{amount} (старий → liqpay)
+        #  • topup|{provider}|{amount} (новий)
+        if len(data) >= 3:
+            provider = (data[1] or "liqpay").lower()
+            amount_uah = _parse_amount(data[2])
+        elif len(data) == 2:
+            provider = "liqpay"
+            amount_uah = _parse_amount(data[1])
+        else:
+            provider, amount_uah = "liqpay", None
+
+        if amount_uah is None:
             return await query.edit_message_text("Невірна сума.")
 
         try:
@@ -327,32 +328,22 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 resp = r.json()
                 log.info("payments.create resp: %s", resp)
         except ConnectError:
-            return await query.edit_message_text(
-                f"❌ Бекенд недоступний ({BACKEND_BASE}). Перевір API/порт."
-            )
+            return await query.edit_message_text(f"❌ Бекенд недоступний ({BACKEND_BASE}). Перевір API/порт.")
         except HTTPError as e:
             body = getattr(e.response, "text", "")[:400]
             return await query.edit_message_text(f"Помилка створення платежу: {e}\n{body}")
 
-        # ===== Формування pay_url =====
         pay_url = resp.get("pay_url") or resp.get("invoiceUrl")
         order_id = resp.get("order_id")
 
-        # Якщо API віддав data+signature — самі збираємо checkout URL (LiqPay)
         if not pay_url and resp.get("data") and resp.get("signature"):
             pay_url = f"https://www.liqpay.ua/api/3/checkout?data={resp['data']}&signature={resp['signature']}"
-
-        # Резервний варіант: /pay/{order_id} на публічному домені (для LiqPay)
         if not pay_url and order_id:
             pay_url = f"{PUBLIC_BASE}/pay/{order_id}"
-
         if not pay_url:
             preview = (str(resp)[:400]).replace("\n", " ")
             log.error("No pay_url returned. Resp=%s", resp)
-            return await query.edit_message_text(
-                "Не отримав посилання на оплату. "
-                f"Відповідь бекенду: {preview}"
-            )
+            return await query.edit_message_text("Не отримав посилання на оплату. " f"Відповідь бекенду: {preview}")
 
         label = _provider_label(provider)
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"💳 Оплатити ({label})", url=pay_url)]])
@@ -368,7 +359,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # --- Платні дії (backlinks) ---
+    # платні дії
     if len(data) != 3:
         return await query.edit_message_text("Невірний запит.")
     action, domain, scope = data
@@ -379,7 +370,11 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = []
         for amount in TOPUP_OPTIONS:
             credits = int(amount // CREDIT_PRICE_UAH)
-            rows.append([InlineKeyboardButton(f"💳 Поповнити {amount}₴ (~{credits} кредитів)", callback_data=f"open_amounts|liqpay")])
+            rows.append([InlineKeyboardButton(
+                f"💳 Поповнити {amount}₴ (~{credits} кредитів)",
+                callback_data=f"topup|liqpay|{amount}"
+            )])
+        rows.append([InlineKeyboardButton("Інші провайдери", callback_data="topup_providers")])
         return await query.edit_message_text(
             f"Недостатньо кредитів (потрібно {need_credits}). Поповніть баланс.",
             reply_markup=InlineKeyboardMarkup(rows)
@@ -418,7 +413,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.exception("Unexpected error")
         await query.edit_message_text(f"Помилка: {e}")
 
-# ====== Обробка меню ======
+# ====== Меню ======
 async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
@@ -434,7 +429,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text("Ви вже зареєстровані ✅", reply_markup=main_menu_keyboard(True))
         return await register_cmd_or_menu(update, context)
 
-# ====== АДМІНКА ======
+# ====== Адмінка ======
 def _db() -> sqlite3.Connection:
     return sqlite3.connect(DB_PATH)
 
@@ -496,13 +491,11 @@ async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Команди
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance))
-    app.add_handler(CommandHandler("topup", topup_providers))  # /topup відкриває вибір провайдера
+    app.add_handler(CommandHandler("topup", topup_providers))
     app.add_handler(CommandHandler("backlinks", backlinks))
 
-    # Реєстрація — розмова
     reg_conv = ConversationHandler(
         entry_points=[
             CommandHandler("register", register_cmd_or_menu),
@@ -514,14 +507,10 @@ def main():
     )
     app.add_handler(reg_conv)
 
-    # Адмінка
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(on_admin_cb, pattern=r"^admin\|"))
 
-    # Callback’и (providers / amounts / topup / backlinks)
     app.add_handler(CallbackQueryHandler(on_choice))
-
-    # Меню-тексти
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_menu_text))
 
     log.info("Bot started. DFS_BASE=%s BACKEND_BASE=%s PUBLIC_BASE=%s", DFS_BASE, BACKEND_BASE, PUBLIC_BASE)
