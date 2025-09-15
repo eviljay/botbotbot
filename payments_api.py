@@ -24,28 +24,28 @@ log = logging.getLogger("payments-api")
 # ====== ENV ======
 load_dotenv()
 
+def _env(name: str, default: str = "") -> str:
+    val = os.getenv(name, default)
+    return (val or "").strip()
+
 # LiqPay
-LIQPAY_PUBLIC_KEY   = os.getenv("LIQPAY_PUBLIC_KEY", "")
-LIQPAY_PRIVATE_KEY  = os.getenv("LIQPAY_PRIVATE_KEY", "")
-LIQPAY_RESULT_URL   = os.getenv("LIQPAY_RESULT_URL", "")
-LIQPAY_SERVER_URL   = os.getenv("LIQPAY_SERVER_URL", "")
+LIQPAY_PUBLIC_KEY   = _env("LIQPAY_PUBLIC_KEY")
+LIQPAY_PRIVATE_KEY  = _env("LIQPAY_PRIVATE_KEY")
+LIQPAY_RESULT_URL   = _env("LIQPAY_RESULT_URL")
+LIQPAY_SERVER_URL   = _env("LIQPAY_SERVER_URL")
 
 # WayForPay
-WFP_MERCHANT_ACCOUNT = os.getenv("WFP_MERCHANT_ACCOUNT", "")
-WFP_MERCHANT_DOMAIN  = os.getenv("WFP_MERCHANT_DOMAIN", "")   # бажано одразу: server1.seoswiss.online
-WFP_SECRET_KEY       = os.getenv("WFP_SECRET_KEY", "")
-WFP_API_URL          = os.getenv("WFP_API_URL", "https://api.wayforpay.com/api")
-WFP_SERVICE_URL      = os.getenv("WFP_SERVICE_URL", "")       # https://server1.seoswiss.online/wayforpay/callback
-# fallback зі старої змінної
-if not WFP_MERCHANT_DOMAIN:
-    _fallback_dom = (os.getenv("WFP_DOMAIN") or "").strip()
-    WFP_MERCHANT_DOMAIN = _fallback_dom
+WFP_MERCHANT_ACCOUNT = _env("WFP_MERCHANT_ACCOUNT") or _env("WFP_ACCOUNT")
+WFP_MERCHANT_DOMAIN  = _env("WFP_MERCHANT_DOMAIN") or _env("WFP_DOMAIN")
+WFP_SECRET_KEY       = _env("WFP_SECRET_KEY")
+WFP_API_URL          = _env("WFP_API_URL") or "https://api.wayforpay.com/api"
+WFP_SERVICE_URL      = _env("WFP_SERVICE_URL")  # https://<host>/wayforpay/callback
 
 # Загальні
-DEFAULT_CCY        = os.getenv("LIQPAY_CURRENCY", "UAH")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-DB_PATH            = os.getenv("DB_PATH", "bot.db")
-CREDIT_PRICE_UAH   = float(os.getenv("CREDIT_PRICE_UAH", "5"))
+DEFAULT_CCY        = _env("LIQPAY_CURRENCY", "UAH").upper()
+TELEGRAM_BOT_TOKEN = _env("TELEGRAM_BOT_TOKEN")
+DB_PATH            = _env("DB_PATH", "bot.db")
+CREDIT_PRICE_UAH   = float(_env("CREDIT_PRICE_UAH", "5"))
 
 # ====== FastAPI ======
 app = FastAPI(title="Payments API (LiqPay + WayForPay)")
@@ -119,7 +119,6 @@ def _gen_order_id(user_id) -> str:
 
 # ====== WayForPay ======
 def _host_from_url(url: str) -> str:
-    """Витягнути хост із URL (без схеми, порту, шляху)."""
     if not url:
         return ""
     s = re.sub(r"^https?://", "", url.strip(), flags=re.I)
@@ -128,7 +127,6 @@ def _host_from_url(url: str) -> str:
     return s.strip().lower()
 
 def _wfp_clean_domain(raw: str) -> str:
-    """Приймає і домен, і URL — повертає тільки хост. Валідує allowed chars."""
     host = _host_from_url(raw)
     if not host:
         return ""
@@ -137,17 +135,17 @@ def _wfp_clean_domain(raw: str) -> str:
     return host
 
 def _wfp_resolve_domain() -> str:
-    """Повернути валідний merchantDomainName з ENV (WFP_MERCHANT_DOMAIN або WFP_DOMAIN або хост із WFP_SERVICE_URL)."""
-    for candidate in (WFP_MERCHANT_DOMAIN, os.getenv("WFP_DOMAIN", ""), WFP_SERVICE_URL):
+    # Порядок пріоритету: WFP_MERCHANT_DOMAIN -> WFP_DOMAIN -> хост із WFP_SERVICE_URL
+    for candidate in (WFP_MERCHANT_DOMAIN, _env("WFP_DOMAIN"), WFP_SERVICE_URL):
         host = _wfp_clean_domain(candidate or "")
         if host:
             return host
     return ""
 
-def _wfp_make_create_signature(merchantAccount: str, merchantDomainName: str,
-                               orderReference: str, orderDate: int,
-                               amount_str: str, currency: str,
-                               productNames: list[str], productCounts: list[int], productPrices_str: list[str]) -> tuple[str, str]:
+def _wfp_build_create_sign_message(merchantAccount: str, merchantDomainName: str,
+                                   orderReference: str, orderDate: int,
+                                   amount_str: str, currency: str,
+                                   productNames: list[str], productCounts: list[int], productPrices_str: list[str]) -> str:
     parts = [
         merchantAccount,
         merchantDomainName,
@@ -159,8 +157,20 @@ def _wfp_make_create_signature(merchantAccount: str, merchantDomainName: str,
         *[str(c) for c in productCounts],
         *productPrices_str,
     ]
-    msg = ";".join(parts)
-    sig = hmac.new(WFP_SECRET_KEY.encode("utf-8"), msg.encode("utf-8"), hashlib.md5).hexdigest()
+    return ";".join(parts)
+
+def _wfp_hmac_md5(message: str) -> str:
+    return hmac.new(WFP_SECRET_KEY.encode("utf-8"), message.encode("utf-8"), hashlib.md5).hexdigest()
+
+def _wfp_make_create_signature(merchantAccount: str, merchantDomainName: str,
+                               orderReference: str, orderDate: int,
+                               amount_str: str, currency: str,
+                               productNames: list[str], productCounts: list[int], productPrices_str: list[str]) -> tuple[str, str]:
+    msg = _wfp_build_create_sign_message(
+        merchantAccount, merchantDomainName, orderReference, orderDate,
+        amount_str, currency, productNames, productCounts, productPrices_str
+    )
+    sig = _wfp_hmac_md5(msg)
     return msg, sig
 
 def _wfp_verify_callback_signature(payload: dict) -> bool:
@@ -175,7 +185,7 @@ def _wfp_verify_callback_signature(payload: dict) -> bool:
         payload.get("reasonCode", ""),
     ]
     msg = ";".join(parts)
-    calc = hmac.new(WFP_SECRET_KEY.encode("utf-8"), msg.encode("utf-8"), hashlib.md5).hexdigest()
+    calc = _wfp_hmac_md5(msg)
     got = (payload.get("merchantSignature") or "").lower()
     if got != calc.lower():
         log.warning("WFP callback: signature mismatch: got=%s calc=%s msg='%s'", got, calc, msg)
@@ -184,7 +194,7 @@ def _wfp_verify_callback_signature(payload: dict) -> bool:
 
 def _wfp_response_signature(orderReference: str, status: str, time_int: int) -> str:
     msg = ";".join([orderReference, status, str(time_int)])
-    return hmac.new(WFP_SECRET_KEY.encode("utf-8"), msg.encode("utf-8"), hashlib.md5).hexdigest()
+    return _wfp_hmac_md5(msg)
 
 # ====== Helpers ======
 def _credit_amount_to_credits(amount_uah: float) -> int:
@@ -231,9 +241,28 @@ def _insert_or_update_payment(conn: sqlite3.Connection, order_id: str, provider:
 # ====== API ======
 @app.get("/health")
 async def health():
-    # корисно побачити, який домен взяли для WFP
     resolved_domain = _wfp_resolve_domain()
-    return {"ok": True, "time": _utc_now_iso(), "wfp_domain": resolved_domain or None}
+    return {"ok": True, "time": _utc_now_iso(), "wfp_domain": resolved_domain or None, "wfp_account": WFP_MERCHANT_ACCOUNT or None}
+
+@app.get("/debug/wfp-sign")
+async def debug_wfp_sign():
+    """Повертає зразок sign_message та signature для швидкої перевірки."""
+    mdomain = _wfp_resolve_domain()
+    if not (WFP_MERCHANT_ACCOUNT and mdomain and WFP_SECRET_KEY):
+        raise HTTPException(500, "WayForPay is not configured")
+    order_id = f"debug-{int(time.time())}"
+    order_ts = int(time.time())
+    amt_dec = Decimal("100").quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    amount_for_sign = f"{amt_dec:.2f}"                 # "100.00"
+    product_names    = ["Top-up credits"]
+    product_counts   = [1]
+    product_prices_s = [amount_for_sign]               # ["100.00"]
+    msg, sig = _wfp_make_create_signature(
+        WFP_MERCHANT_ACCOUNT, mdomain, order_id, order_ts,
+        amount_for_sign, DEFAULT_CCY,
+        product_names, product_counts, product_prices_s
+    )
+    return {"merchantAccount": WFP_MERCHANT_ACCOUNT, "merchantDomainName": mdomain, "orderReference": order_id, "orderDate": order_ts, "amount_str": amount_for_sign, "currency": DEFAULT_CCY, "productName": product_names, "productCount": product_counts, "productPrice_str": product_prices_s, "sign_message": msg, "signature": sig}
 
 @app.post("/api/payments/create")
 async def create_payment(req: Request):
@@ -284,32 +313,23 @@ async def create_payment(req: Request):
         mdomain = _wfp_resolve_domain()
         if not (WFP_MERCHANT_ACCOUNT and mdomain and WFP_SECRET_KEY):
             raise HTTPException(500, "WayForPay is not configured")
-        # дод. валідація
-        if not re.fullmatch(r"[a-z0-9.-]+", mdomain) or mdomain.count(".") < 1 or "t.me" in mdomain:
-            raise HTTPException(500, f"Invalid WFP_MERCHANT_DOMAIN='{mdomain}'. Set a bare host like 'server1.seoswiss.online'")
+        # рекомендується ставити КОРЕНЕВИЙ домен із кабінету, напр. 'seoswiss.online'
+        if not re.fullmatch(r"[a-z0-9.-]+", mdomain) or mdomain.count(".") < 1:
+            raise HTTPException(500, f"Invalid WFP_MERCHANT_DOMAIN='{mdomain}'. Use bare host like 'seoswiss.online'")
 
         order_ts = int(time.time())
         amt_dec = Decimal(str(amount_f)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        amount_for_sign = f"{amt_dec:.2f}"                # "100.00"
-        product_names   = ["Top-up credits"]
-        product_counts  = [1]
-        product_prices_for_sign = [amount_for_sign]       # ["100.00"]
+        amount_for_sign  = f"{amt_dec:.2f}"          # "100.00"
+        product_names    = ["Top-up credits"]
+        product_counts   = [1]
+        product_prices_s = [amount_for_sign]         # ["100.00"]
 
         sign_msg, signature = _wfp_make_create_signature(
-            WFP_MERCHANT_ACCOUNT,
-            mdomain,
-            order_id,
-            order_ts,
-            amount_for_sign,
-            currency,
-            product_names,
-            product_counts,
-            product_prices_for_sign
+            WFP_MERCHANT_ACCOUNT, mdomain, order_id, order_ts,
+            amount_for_sign, currency, product_names, product_counts, product_prices_s
         )
-        log.info("WFP domain='%s' sign_message='%s' signature='%s'", mdomain, sign_msg, signature)
-
-        amount_for_json = float(amt_dec)                  # 100.0
-        product_prices_json = [float(amt_dec)]            # [100.0]
+        # важливо: бачимо, ЩО саме підписуємо
+        log.warning("WFP sign: domain='%s' msg='%s' sig='%s'", mdomain, sign_msg, signature)
 
         req_payload = {
             "transactionType": "CREATE_INVOICE",
@@ -321,10 +341,10 @@ async def create_payment(req: Request):
             "serviceUrl": (WFP_SERVICE_URL or None),
             "orderReference": order_id,
             "orderDate": order_ts,
-            "amount": amount_for_json,
+            "amount": float(amt_dec),                  # 100.0
             "currency": currency,
             "productName": product_names,
-            "productPrice": product_prices_json,
+            "productPrice": [float(amt_dec)],         # [100.0]
             "productCount": product_counts,
         }
         req_payload = {k: v for k, v in req_payload.items() if v is not None}
@@ -464,8 +484,8 @@ async def wayforpay_callback(req: Request):
 @app.get("/thanks", response_class=HTMLResponse)
 async def thanks_page():
     try:
-        bot_url = (os.getenv("TELEGRAM_BOT_URL") or "").strip()
-        start_param = os.getenv("TELEGRAM_START_PARAM", "paid")
+        bot_url = _env("TELEGRAM_BOT_URL")
+        start_param = _env("TELEGRAM_START_PARAM", "paid")
         if bot_url:
             sep = "&" if "?" in bot_url else "?"
             dest = f"{bot_url}{sep}start={start_param}"
