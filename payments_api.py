@@ -41,111 +41,77 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 DB_PATH            = os.getenv("DB_PATH", "bot.db")
 CREDIT_PRICE_UAH   = float(os.getenv("CREDIT_PRICE_UAH", "5"))
 
+if not DB_PATH:
+    raise RuntimeError("DB_PATH is required")
+
 # ====== FastAPI ======
 app = FastAPI(title="Payments API (LiqPay + WayForPay)")
 
 # Пам'ять для редіректу: /pay/{order_id} -> pay_url (для LiqPay, якщо треба)
 ORDER_CACHE: dict[str, str] = {}
 
-# ====== DB bootstrap ======
-def _db():
-    return sqlite3.connect(DB_PATH)
+# ====== DB helpers ======
+def _db() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table,))
+    return cur.fetchone() is not None
+
+def _payments_cols(conn: sqlite3.Connection) -> set[str]:
+    cur = conn.execute("PRAGMA table_info(payments)")
+    return {row[1] for row in cur.fetchall()}  # row[1] = column name
 
 def _init_db():
     with _db() as conn:
+        # users — мінімально потрібна
         conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
-            balance INTEGER DEFAULT 0,
+            balance INTEGER NOT NULL DEFAULT 0,
             phone   TEXT
-        )
+        );
         """)
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS payments (
-            order_id   TEXT PRIMARY KEY,
-            provider   TEXT NOT NULL,
-            user_id    INTEGER NOT NULL,
-            amount     REAL NOT NULL,
-            credits    INTEGER NOT NULL,
-            status     TEXT NOT NULL,   -- success/failed/pending/etc.
-            raw        TEXT,
-            created_at TEXT NOT NULL
-        )
-        """)
+        # payments — якщо таблиця відсутня, створимо "сумісну" схему, яка покриває старі й нові поля
+        if not _table_exists(conn, "payments"):
+            conn.execute("""
+            CREATE TABLE payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                order_reference TEXT,      -- може бути NULL; якщо потрібен UNIQUE — адміністратор додасть
+                amount REAL NOT NULL,
+                currency TEXT,
+                status TEXT NOT NULL,
+                raw_json TEXT,
+                raw TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                order_id TEXT
+            );
+            """)
+            # індекси — не обов'язкові, але корисні
+            try:
+                conn.execute("CREATE UNIQUE INDEX idx_payments_order_id ON payments(order_id);")
+            except Exception:
+                pass
+            try:
+                conn.execute("CREATE UNIQUE INDEX idx_payments_order_reference ON payments(order_reference);")
+            except Exception:
+                pass
         conn.commit()
 
 _init_db()
 
-# ====== Утиліти (LiqPay) ======
-def _b64(data: bytes) -> str:
-    return base64.b64encode(data).decode("utf-8")
-
-def _liqpay_encode(payload: dict) -> str:
-    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    return _b64(raw)
-
-def _liqpay_sign(data_b64: str) -> str:
-    # signature = base64( sha1( private_key + data + private_key ) )
-    # За новими доками LiqPay використовує sha3-256 у деяких ендпойнтах,
-    # але класичний checkout приймає sha1 — залишаємо як у тебе.
-    to_sign = (PRIVATE_KEY + data_b64 + PRIVATE_KEY).encode("utf-8")
-    digest = hashlib.sha1(to_sign).digest()
-    return _b64(digest)
+# ====== Утиліти загальні ======
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 def _gen_order_id(user_id) -> str:
     # короткий унікальний id, з якого можна витягнути user_id у колбеку
     return f"{user_id}-{os.urandom(6).hex()}"
-
-# ====== Утиліти (WayForPay) ======
-def _wfp_join(fields: list[str]) -> str:
-    # Конкатенація через ';' у UTF-8
-    return ";".join(fields)
-
-def _wfp_hmac_md5(message: str) -> str:
-    # HMAC_MD5(message, secretKey) -> hex
-    return hmac.new(WFP_SECRET_KEY.encode("utf-8"), message.encode("utf-8"), hashlib.md5).hexdigest()
-
-def _wfp_make_request_signature(merchantAccount: str, merchantDomainName: str,
-                                orderReference: str, orderDate: int,
-                                amount: str, currency: str,
-                                productNames: list[str], productCounts: list[int], productPrices: list[float]) -> str:
-    # Док: concat merchantAccount;merchantDomainName;orderReference;orderDate;amount;currency;
-    # productName[]...; productCount[]...; productPrice[]...
-    parts: list[str] = [
-        merchantAccount,
-        merchantDomainName,
-        orderReference,
-        str(orderDate),
-        amount,
-        currency,
-        *productNames,
-        *[str(c) for c in productCounts],
-        *[("{:.2f}".format(p)) for p in productPrices],
-    ]
-    return _wfp_hmac_md5(_wfp_join(parts))
-
-def _wfp_verify_callback_signature(payload: dict) -> bool:
-    # Док: concat merchantAccount;orderReference;amount;currency;authCode;cardPan;transactionStatus;reasonCode
-    parts = [
-        payload.get("merchantAccount", ""),
-        payload.get("orderReference", ""),
-        str(payload.get("amount", "")),
-        payload.get("currency", ""),
-        payload.get("authCode", ""),
-        payload.get("cardPan", ""),
-        payload.get("transactionStatus", ""),
-        payload.get("reasonCode", ""),
-    ]
-    calc = _wfp_hmac_md5(_wfp_join(parts))
-    return (payload.get("merchantSignature") or "").lower() == calc.lower()
-
-def _wfp_response_signature(orderReference: str, status: str, time_int: int) -> str:
-    # Відповідь мерчанта: concat orderReference;status;time
-    return _wfp_hmac_md5(_wfp_join([orderReference, status, str(time_int)]))
-
-# ====== Helpers ======
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 def _credit_amount_to_credits(amount_uah: float) -> int:
     return max(1, math.ceil(amount_uah / CREDIT_PRICE_UAH))
@@ -167,36 +133,134 @@ def _ensure_user_and_add_credits(conn: sqlite3.Connection, user_id: int, credits
     conn.execute("INSERT OR IGNORE INTO users(user_id, balance) VALUES(?, ?)", (user_id, 0))
     conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (credits, user_id))
 
+# ====== LiqPay utils ======
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode("utf-8")
+
+def _liqpay_encode(payload: dict) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return _b64(raw)
+
+def _liqpay_sign(data_b64: str) -> str:
+    # signature = base64( sha1( private_key + data + private_key ) )
+    to_sign = (PRIVATE_KEY + data_b64 + PRIVATE_KEY).encode("utf-8")
+    digest = hashlib.sha1(to_sign).digest()
+    return _b64(digest)
+
+# ====== WayForPay utils ======
+def _wfp_join(fields: list[str]) -> str:
+    return ";".join(fields)
+
+def _wfp_hmac_md5(message: str) -> str:
+    return hmac.new(WFP_SECRET_KEY.encode("utf-8"), message.encode("utf-8"), hashlib.md5).hexdigest()
+
+def _wfp_make_request_signature(merchantAccount: str, merchantDomainName: str,
+                                orderReference: str, orderDate: int,
+                                amount: str, currency: str,
+                                productNames: list[str], productCounts: list[int], productPrices: list[float]) -> str:
+    parts: list[str] = [
+        merchantAccount,
+        merchantDomainName,
+        orderReference,
+        str(orderDate),
+        amount,
+        currency,
+        *productNames,
+        *[str(c) for c in productCounts],
+        *[("{:.2f}".format(p)) for p in productPrices],
+    ]
+    return _wfp_hmac_md5(_wfp_join(parts))
+
+def _wfp_verify_callback_signature(payload: dict) -> bool:
+    # concat merchantAccount;orderReference;amount;currency;authCode;cardPan;transactionStatus;reasonCode
+    parts = [
+        payload.get("merchantAccount", ""),
+        payload.get("orderReference", ""),
+        str(payload.get("amount", "")),
+        payload.get("currency", ""),
+        payload.get("authCode", ""),
+        payload.get("cardPan", ""),
+        payload.get("transactionStatus", ""),
+        payload.get("reasonCode", ""),
+    ]
+    calc = _wfp_hmac_md5(_wfp_join(parts))
+    return (payload.get("merchantSignature") or "").lower() == calc.lower()
+
+def _wfp_response_signature(orderReference: str, status: str, time_int: int) -> str:
+    return _wfp_hmac_md5(_wfp_join([orderReference, status, str(time_int)]))
+
+# ====== Адаптивний запис у payments ======
 def _insert_or_update_payment(conn: sqlite3.Connection, order_id: str, provider: str, user_id: int,
                               amount: float, credits: int, status: str, raw: dict) -> bool:
     """
     Повертає True, якщо вперше зафіксовано success і ми нарахували кредити.
+    Працює з різними схемами таблиці payments (старою/новою).
     """
-    cur = conn.execute("SELECT status FROM payments WHERE order_id = ?", (order_id,))
-    row = cur.fetchone()
+    cols = _payments_cols(conn)
     now_iso = _utc_now_iso()
 
+    # Готуємо можливі значення
+    raw_json_text = json.dumps(raw, ensure_ascii=False)
+    values = {
+        "order_id": order_id,
+        "provider": provider,
+        "user_id": user_id,
+        "amount": amount,
+        "credits": credits,
+        "status": status,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+        # для сумісності зі старою схемою
+        "currency": DEFAULT_CCY,
+        "order_reference": order_id,
+        "raw": raw_json_text,
+        "raw_json": raw_json_text,
+    }
+
+    # Дістанемо попередній статус за order_id (як основний ключ логіки)
+    row = conn.execute("SELECT status FROM payments WHERE order_id = ?", (order_id,)).fetchone()
+
+    def _insert():
+        insert_fields = [c for c in (
+            "order_id", "provider", "user_id", "amount", "credits", "status",
+            "raw", "raw_json", "created_at", "updated_at", "currency", "order_reference"
+        ) if c in cols]
+        placeholders = ",".join(["?"] * len(insert_fields))
+        sql = f"INSERT INTO payments({','.join(insert_fields)}) VALUES({placeholders})"
+        conn.execute(sql, tuple(values[f] for f in insert_fields))
+
+    def _update_success():
+        update_pairs, update_vals = [], []
+        for c in ("status", "raw", "raw_json", "updated_at"):
+            if c in cols:
+                update_pairs.append(f"{c}=?")
+                update_vals.append(values[c])
+        if update_pairs:
+            conn.execute(f"UPDATE payments SET {', '.join(update_pairs)} WHERE order_id=?", (*update_vals, order_id))
+
+    def _update_raw_only():
+        update_pairs, update_vals = [], []
+        for c in ("raw", "raw_json", "updated_at"):
+            if c in cols:
+                update_pairs.append(f"{c}=?")
+                update_vals.append(values[c])
+        if update_pairs:
+            conn.execute(f"UPDATE payments SET {', '.join(update_pairs)} WHERE order_id=?", (*update_vals, order_id))
+
     if row is None:
-        conn.execute(
-            "INSERT INTO payments(order_id, provider, user_id, amount, credits, status, raw, created_at) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (order_id, provider, user_id, amount, credits, status, json.dumps(raw, ensure_ascii=False), now_iso)
-        )
-        # Нараховуємо кредити тільки якщо success
+        _insert()
         if status == "success":
             _ensure_user_and_add_credits(conn, user_id, credits)
             return True
         return False
     else:
-        prev = (row[0] or "").lower()
+        prev = (row["status"] or "").lower()
         if prev != "success" and status == "success":
-            # оновлюємо статус → success, нараховуємо один раз
-            conn.execute("UPDATE payments SET status = ?, raw = ? WHERE order_id = ?", ("success", json.dumps(raw, ensure_ascii=False), order_id))
+            _update_success()
             _ensure_user_and_add_credits(conn, user_id, credits)
             return True
         else:
-            # оновити сирі дані, якщо хочемо тримати історію (без нарахувань)
-            conn.execute("UPDATE payments SET raw = ? WHERE order_id = ?", (json.dumps(raw, ensure_ascii=False), order_id))
+            _update_raw_only()
             return False
 
 # ====== API ======
@@ -223,10 +287,9 @@ async def create_payment(req: Request):
     currency = (body.get("currency") or DEFAULT_CCY).upper()
     provider = (body.get("provider") or "liqpay").lower()
 
-    if not user_id or not amount:
+    if not user_id or amount is None:
         raise HTTPException(400, "user_id and amount required")
 
-    # Валідація amount
     try:
         amount_f = float(amount)
         if amount_f <= 0:
@@ -236,6 +299,7 @@ async def create_payment(req: Request):
 
     order_id = str(body.get("order_id") or _gen_order_id(user_id))
 
+    # ===== LiqPay =====
     if provider == "liqpay":
         if not (PUBLIC_KEY and PRIVATE_KEY and SERVER_URL and RESULT_URL):
             raise HTTPException(500, "LiqPay is not configured")
@@ -260,12 +324,21 @@ async def create_payment(req: Request):
         ORDER_CACHE[order_id] = pay_url
         log.info("Create payment [LiqPay]: user=%s amount=%.2f %s order_id=%s", user_id, amount_f, currency, order_id)
 
-        # Фіксуємо "pending" в журналі (без нарахувань)
-        with _db() as conn:
-            _insert_or_update_payment(conn, order_id, "liqpay", int(user_id), amount_f, _credit_amount_to_credits(amount_f), "pending", {"req": "create_liqpay", "payload": payload})
+        # journal: pending
+        try:
+            with _db() as conn:
+                _insert_or_update_payment(
+                    conn, order_id, "liqpay", int(user_id), amount_f,
+                    _credit_amount_to_credits(amount_f), "pending",
+                    {"req": "create_liqpay", "payload": payload}
+                )
+                conn.commit()
+        except Exception:
+            log.exception("DB journal insert (LiqPay) failed")
 
         return JSONResponse({"ok": True, "provider": "liqpay", "order_id": order_id, "pay_url": pay_url})
 
+    # ===== WayForPay =====
     elif provider in ("wayforpay", "wfp"):
         if not (WFP_MERCHANT_ACCOUNT and WFP_MERCHANT_DOMAIN and WFP_SECRET_KEY):
             raise HTTPException(500, "WayForPay is not configured")
@@ -295,7 +368,7 @@ async def create_payment(req: Request):
             "merchantDomainName": WFP_MERCHANT_DOMAIN,
             "merchantSignature": signature,
             "apiVersion": 1,
-            "serviceUrl": WFP_SERVICE_URL or None,   # якщо не задано — не передаємо
+            "serviceUrl": WFP_SERVICE_URL or None,
             "orderReference": order_id,
             "orderDate": order_ts,
             "amount": amount_f,
@@ -303,9 +376,8 @@ async def create_payment(req: Request):
             "productName": product_names,
             "productPrice": product_prices,
             "productCount": product_counts,
-            # "paymentSystems": "card;privat24",  # за потреби
         }
-        # прибирання None
+        # прибрати None
         req_payload = {k: v for k, v in req_payload.items() if v is not None}
 
         try:
@@ -319,14 +391,22 @@ async def create_payment(req: Request):
 
         invoice_url = resp.get("invoiceUrl")
         if not invoice_url:
-            # у відповіді можуть бути "reason" / "reasonCode" — повернемо їх
             return JSONResponse({"ok": False, "provider": "wayforpay", "error": resp}, status_code=502)
 
-        # Фіксуємо "pending" в журналі
-        with _db() as conn:
-            _insert_or_update_payment(conn, order_id, "wayforpay", int(user_id), amount_f, _credit_amount_to_credits(amount_f), "pending", {"req": "create_wfp", "payload": req_payload, "resp": resp})
-
         log.info("Create payment [WFP]: user=%s amount=%.2f %s order_id=%s", user_id, amount_f, currency, order_id)
+
+        # journal: pending
+        try:
+            with _db() as conn:
+                _insert_or_update_payment(
+                    conn, order_id, "wayforpay", int(user_id), amount_f,
+                    _credit_amount_to_credits(amount_f), "pending",
+                    {"req": "create_wfp", "payload": req_payload, "resp": resp}
+                )
+                conn.commit()
+        except Exception:
+            log.exception("DB journal insert (WFP) failed")
+
         return JSONResponse({"ok": True, "provider": "wayforpay", "order_id": order_id, "pay_url": invoice_url})
 
     else:
@@ -343,8 +423,7 @@ async def pay_redirect(order_id: str):
 @app.post("/liqpay/callback")
 async def liqpay_callback(req: Request):
     """
-    Серверний колбек від LiqPay (POST form-data: data, signature).
-    Перевіряємо підпис, оновлюємо баланс і шлемо повідомлення в Telegram.
+    LiqPay (POST form-data: data, signature)
     """
     form = await req.form()
     data_b64  = form.get("data")
@@ -375,13 +454,12 @@ async def liqpay_callback(req: Request):
     try:
         with _db() as conn:
             credits = _credit_amount_to_credits(amount)
-            # success/sandbox вважаємо успіхом
             new_status = "success" if status in ("success", "sandbox") else status
             newly_credited = _insert_or_update_payment(conn, order_id, "liqpay", user_id, amount, credits, new_status, payload)
             conn.commit()
-    except Exception as e:
+    except Exception:
         log.exception("DB update error (LiqPay)")
-        return JSONResponse({"ok": False, "reason": f"db_error: {e}"})
+        return JSONResponse({"ok": False, "reason": "db_error"})
 
     if newly_credited:
         await _notify_user_tg(user_id, f"✅ Оплату отримано: +{amount:.0f}₴ → +{_credit_amount_to_credits(amount)} кредит(и). Дякуємо!")
@@ -392,18 +470,8 @@ async def liqpay_callback(req: Request):
 @app.post("/wayforpay/callback")
 async def wayforpay_callback(req: Request):
     """
-    WayForPay serviceUrl callback.
-    Тіло: JSON із полями, зокрема:
-      merchantAccount, orderReference, amount, currency, authCode, cardPan, transactionStatus, reasonCode, merchantSignature
-    Підпис перевіряється HMAC_MD5 за докою.
-
-    У відповідь WayForPay очікує:
-      {
-        "orderReference":"<id>",
-        "status":"accept"|"reject",
-        "time": <unix>,
-        "signature":"<hmac_md5(orderReference;status;time)>"
-      }
+    WayForPay serviceUrl callback (JSON).
+    Очікує валідний merchantSignature (HMAC_MD5).
     """
     try:
         payload = await req.json()
@@ -413,7 +481,6 @@ async def wayforpay_callback(req: Request):
 
     if not _wfp_verify_callback_signature(payload):
         log.warning("Invalid signature callback (WFP)")
-        # навіть при невалідному підписі повертаємо reject з валідним підписом
         order_ref = payload.get("orderReference", "")
         ts = int(datetime.now(timezone.utc).timestamp())
         resp = {
@@ -426,19 +493,10 @@ async def wayforpay_callback(req: Request):
 
     order_id = payload.get("orderReference") or ""
     amount   = float(payload.get("amount") or 0)
-    status_w = (payload.get("transactionStatus") or "").lower()  # Approved/Declined/Expired/Voided
-    user_id  = None
-
+    status_w = (payload.get("transactionStatus") or "").lower()  # approved/declined/expired/voided
     m = re.match(r"^(\d+)-", str(order_id))
-    if m:
-        try:
-            user_id = int(m.group(1))
-        except Exception:
-            user_id = None
-
-    if user_id is None:
+    if not m:
         log.error("WFP callback: cannot extract user_id from orderReference=%s", order_id)
-        # Відповідь все одно треба дати "accept"/"reject". Тут логічно reject.
         ts = int(datetime.now(timezone.utc).timestamp())
         resp = {
             "orderReference": order_id,
@@ -447,10 +505,9 @@ async def wayforpay_callback(req: Request):
             "signature": _wfp_response_signature(order_id, "reject", ts)
         }
         return JSONResponse(resp)
+    user_id = int(m.group(1))
 
-    # Маппінг у наш статус
     new_status = "success" if status_w == "approved" else status_w
-
     newly_credited = False
     try:
         with _db() as conn:
@@ -468,9 +525,8 @@ async def wayforpay_callback(req: Request):
         }
         return JSONResponse(resp)
 
-    # Відповідь для WFP
     ts = int(datetime.now(timezone.utc).timestamp())
-    resp_status = "accept"  # якщо підпис ок і все обробили — приймаємо
+    resp_status = "accept"
     resp = {
         "orderReference": order_id,
         "status": resp_status,
@@ -478,7 +534,6 @@ async def wayforpay_callback(req: Request):
         "signature": _wfp_response_signature(order_id, resp_status, ts)
     }
 
-    # Нотиф юзера при першому успішному нарахуванні
     if newly_credited and new_status == "success":
         await _notify_user_tg(user_id, f"✅ Оплату отримано: +{amount:.0f}₴ → +{_credit_amount_to_credits(amount)} кредит(и). Дякуємо!")
 
