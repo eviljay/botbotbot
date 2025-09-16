@@ -56,6 +56,12 @@ CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
 BACKLINKS_CHARGE_UAH = float(os.getenv("BACKLINKS_CHARGE_UAH", "5"))
 INITIAL_BONUS = int(os.getenv("INITIAL_BONUS", "10"))
 TOPUP_OPTIONS = [int(x.strip()) for x in os.getenv("TOPUP_OPTIONS", "100,250,500").split(",") if x.strip().isdigit()]
+# ====== PRICING FOR TOOLS ======
+RESEARCH_CHARGE_UAH = float(os.getenv("RESEARCH_CHARGE_UAH", "5"))
+SERP_CHARGE_UAH     = float(os.getenv("SERP_CHARGE_UAH", "5"))
+GAP_CHARGE_UAH      = float(os.getenv("GAP_CHARGE_UAH", "5"))
+
+
 
 # для адмінки
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
@@ -72,17 +78,39 @@ dfs = DataForSEO(DFS_LOGIN, DFS_PASS, DFS_BASE)
 
 # ====== Утиліти ======
 def main_menu_keyboard(registered: bool) -> ReplyKeyboardMarkup:
-    if registered:
-        rows = [
-            [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
-            [KeyboardButton("📊 Баланс")],
-        ]
-    else:
-        rows = [
-            [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
-            [KeyboardButton("📊 Баланс"), KeyboardButton("📱 Реєстрація")],
-        ]
+    # Коротке головне меню: Тули / Баланс / Поповнити (+ Реєстрація якщо треба)
+    rows = [
+        [KeyboardButton("🧰 Тули"), KeyboardButton("📊 Баланс")],
+        [KeyboardButton("💳 Поповнити")]
+    ]
+    if not registered:
+        rows.append([KeyboardButton("📱 Реєстрація")])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
+def tools_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔎 Research", callback_data="tool|research")],
+        [InlineKeyboardButton("📊 SERP Checker", callback_data="tool|serp")],
+        [InlineKeyboardButton("🆚 Keyword Gap", callback_data="tool|gap")],
+        [InlineKeyboardButton("🔗 Backlinks", callback_data="tool|backlinks")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="tools|back")]
+    ])
+
+
+async def open_tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🧰 *Меню тулів*\n\n"
+        "Оберіть інструмент:\n"
+        "• 🔎 Research — підбір ключових слів\n"
+        "• 📊 SERP Checker — топ видачі по ключу\n"
+        "• 🆚 Keyword Gap — ключі конкурентів, яких у вас нема\n"
+        "• 🔗 Backlinks — робота з беклінками"
+    )
+    if update.message:
+        await update.message.reply_text(text, reply_markup=tools_menu_kb(), parse_mode="Markdown")
+    else:
+        await update.callback_query.edit_message_text(text, reply_markup=tools_menu_kb(), parse_mode="Markdown")
+
 
 def _extract_items(resp: dict) -> List[dict]:
     tasks = resp.get("tasks") or []
@@ -286,6 +314,103 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode="Markdown",
     )
+async def on_tool_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    ensure_user(uid)
+    awaiting = context.user_data.get("await_tool")
+    if not awaiting:
+        return  # не наш кейс
+
+    text = (update.message.text or "").strip()
+    try:
+        if awaiting == "research":
+            # розбір "seed, cc"
+            if "," in text:
+                seed, cc = [x.strip() for x in text.split(",", 1)]
+            else:
+                seed, cc = text, "us"
+            need_credits = _uah_to_credits(RESEARCH_CHARGE_UAH)
+            if not charge(uid, need_credits, "research", seed):
+                return await update.message.reply_text(
+                    f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
+            # виклик DFS
+            data_resp = await dfs.keyword_suggestions(seed, cc.lower())
+            items = _extract_items(data_resp) or []
+            # короткий вивід
+            preview = []
+            for it in items[:10]:
+                kw = it.get("keyword") or it.get("text") or ""
+                vol = it.get("search_volume") or it.get("avg_monthly_searches")
+                preview.append(f"• {kw} — vol: {vol}")
+            bal_now = get_balance(uid)
+            msg = "Нічого не знайдено." if not preview else "\n".join(preview)
+            return await update.message.reply_text(f"{msg}\n\n💰 Списано {need_credits}. Баланс: {bal_now}")
+
+        if awaiting == "serp":
+            if "," in text:
+                kw, cc = [x.strip() for x in text.split(",", 1)]
+            else:
+                kw, cc = text, "us"
+            need_credits = _uah_to_credits(SERP_CHARGE_UAH)
+            if not charge(uid, need_credits, "serp", kw):
+                return await update.message.reply_text(
+                    f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
+            data_resp = await dfs.serp_organic(kw, cc.lower(), limit=10)
+            items = _extract_items(data_resp) or []
+            lines = []
+            for i, it in enumerate(items[:10], 1):
+                url = it.get("url") or it.get("result_url") or it.get("domain")
+                title = (it.get("title") or "").strip()
+                lines.append(f"{i}. {title[:70]} — {url}")
+            bal_now = get_balance(uid)
+            msg = "Нічого не знайдено." if not lines else "\n".join(lines)
+            return await update.message.reply_text(f"{msg}\n\n💰 Списано {need_credits}. Баланс: {bal_now}")
+
+        if awaiting == "gap":
+            # формат: my.com vs c1.com, c2.com
+            if " vs " not in text.lower():
+                return await update.message.reply_text(
+                    "Формат: `yourdomain.com vs competitor1.com, competitor2.com`", parse_mode="Markdown")
+            left, right = text.split(" vs ", 1)
+            your = left.strip()
+            comps = [c.strip().strip(",") for c in right.split(",") if c.strip()]
+            if not your or not comps:
+                return await update.message.reply_text("Вкажіть домен та щонайменше 1 конкурента.")
+            need_credits = _uah_to_credits(GAP_CHARGE_UAH)
+            if not charge(uid, need_credits, "gap", f"{your} vs {','.join(comps)}"):
+                return await update.message.reply_text(
+                    f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
+            data_resp = await dfs.keyword_gap(your, comps, limit=20)
+            # очікуємо масив ключів, яких нема у your, але є у конкурентів
+            items = _extract_items(data_resp) or []
+            lines = []
+            for it in items[:20]:
+                kw = it.get("keyword") or it.get("text") or ""
+                vol = it.get("search_volume") or it.get("avg_monthly_searches")
+                who = ", ".join(it.get("owners", [])) if isinstance(it.get("owners"), list) else ""
+                lines.append(f"• {kw} — vol: {vol} — у: {who}")
+            bal_now = get_balance(uid)
+            msg = "Нічого не знайдено." if not lines else "\n".join(lines)
+            return await update.message.reply_text(f"{msg}\n\n💰 Списано {need_credits}. Баланс: {bal_now}")
+
+    except HTTPError as e:
+        return await update.message.reply_text(f"DataForSEO HTTP error: {e}")
+    except Exception as e:
+        log.exception("tool error")
+        return await update.message.reply_text(f"Помилка: {e}")
+    finally:
+        # очищаємо стан очікування
+        context.user_data.pop("await_tool", None)
+
+
+
+    # Відкрити меню тулів
+    app.add_handler(MessageHandler(filters.Regex(r"^🧰 Тули$"), open_tools_menu))
+
+    # Обробка текстового вводу параметрів після вибору тулу
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_tool_input))
+
+
 
 # ====== CALLBACKS (topup & backlinks) ======
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -317,6 +442,53 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cmd == "provider_soon":
         label = _provider_label(parts[1] if len(parts) > 1 else "")
         return await query.answer(f"{label} ще не підключено", show_alert=False)
+
+
+
+        # --- Меню тулів (inline) ---
+    if cmd == "tools" and len(parts) > 1 and parts[1] == "back":
+        # Повертаємося до головного меню (просто замінимо повідомлення)
+        reg = _registered(uid)
+        try:
+            await query.edit_message_text("Повернулися в головне меню. Оберіть дію з клавіатури нижче.")
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=uid, text="Головне меню:", reply_markup=main_menu_keyboard(reg))
+        return
+
+    if cmd == "tool":
+        tool = parts[1] if len(parts) > 1 else ""
+        # Маркуємо, що чекаємо наступне повідомлення з параметрами
+        if tool == "research":
+            context.user_data["await_tool"] = "research"
+            return await query.edit_message_text(
+                "🔎 *Research*\nНадішліть запит у форматі: `seed_keyword, country_code`\n"
+                "Напр.: `coffee, us` або `seo audit, ua`",
+                parse_mode="Markdown"
+            )
+        if tool == "serp":
+            context.user_data["await_tool"] = "serp"
+            return await query.edit_message_text(
+                "📊 *SERP Checker*\nНадішліть запит у форматі: `keyword, country_code`\n"
+                "Напр.: `best vpn, us` або `купити ноутбук, ua`",
+                parse_mode="Markdown"
+            )
+        if tool == "gap":
+            context.user_data["await_tool"] = "gap"
+            return await query.edit_message_text(
+                "🆚 *Keyword Gap*\nНадішліть запит у форматі: `yourdomain.com vs competitor1.com, competitor2.com`\n"
+                "Хоча б 1 конкурент. Напр.: `mysite.com vs site1.com, site2.com`",
+                parse_mode="Markdown"
+            )
+        if tool == "backlinks":
+            context.user_data.pop("await_tool", None)
+            return await query.edit_message_text("Введіть команду: `/backlinks yourdomain.com`", parse_mode="Markdown")
+
+
+
+
+
+
 
     # --- Поповнення (створення інвойсу) ---
     if cmd == "topup":

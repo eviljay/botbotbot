@@ -37,3 +37,15 @@ class DataForSEO:
     async def anchors_live(self, target: str, limit: int = 50, order_by: str = "backlinks,desc"):
         task = {"target": target, "limit": limit, "order_by": [order_by]}
         return await self._post_array("/v3/backlinks/anchors/live", [task])
+ 
+    async def keyword_suggestions(self, seed: str, cc: str):
+        # зроби POST на Keywords for keywords_data/google/keywords_for_keywords/live
+        # з payload типу {"keywords": [seed], "location_code": <by cc>, "language_code": "en"} і т.д.
+        ...
+
+    async def serp_organic(self, keyword: str, cc: str, limit: int = 10):
+        # POST на serp/google/organic/live (v3) або актуальний endpoint
+ 
+
+    async def keyword_gap(self, your_domain: str, competitors: list[str], limit: int = 20):
+ 
