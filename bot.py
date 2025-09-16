@@ -6,7 +6,7 @@ import csv
 import math
 import logging
 import sqlite3
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
 from httpx import AsyncClient, ConnectError, HTTPError
@@ -39,48 +39,58 @@ log = logging.getLogger("bot")
 
 # ====== ENV ======
 load_dotenv()
-
 TELEGRAM_BOT_URL     = os.getenv("TELEGRAM_BOT_URL", "")
 TELEGRAM_START_PARAM = os.getenv("TELEGRAM_START_PARAM", "paid")
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 DFS_LOGIN = os.environ["DATAFORSEO_LOGIN"]
-DFS_PASS  = os.environ["DATAFORSEO_PASSWORD"]
-DFS_BASE  = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
+DFS_PASS = os.environ["DATAFORSEO_PASSWORD"]
+DFS_BASE = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
 
 # внутрішній бекенд (локальний API)
 BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8001").rstrip("/")
-# публічний домен (на випадок, якщо колись доведеться дати /pay/{order_id})
+# публічний домен (на випадок кнопки /pay/{order_id})
 PUBLIC_BASE  = os.getenv("PUBLIC_BASE", "https://server1.seoswiss.online").rstrip("/")
 
-# Ціни/кредити
+# ====== Прайси/ліміти ======
 CREDIT_PRICE_UAH       = float(os.getenv("CREDIT_PRICE_UAH", "5"))
 BACKLINKS_CHARGE_UAH   = float(os.getenv("BACKLINKS_CHARGE_UAH", "5"))
 RESEARCH_CHARGE_UAH    = float(os.getenv("RESEARCH_CHARGE_UAH", "5"))
 SERP_CHARGE_UAH        = float(os.getenv("SERP_CHARGE_UAH", "5"))
 GAP_CHARGE_UAH         = float(os.getenv("GAP_CHARGE_UAH", "5"))
+
 INITIAL_BONUS          = int(os.getenv("INITIAL_BONUS", "10"))
 TOPUP_OPTIONS          = [int(x.strip()) for x in os.getenv("TOPUP_OPTIONS", "100,250,500").split(",") if x.strip().isdigit()]
 
-# для адмінки
+# ====== Адмінка ======
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
-DB_PATH   = os.getenv("DB_PATH", "bot.db")
+DB_PATH = os.getenv("DB_PATH", "bot.db")
 
-# Інші константи
+# ====== Інше ======
 PREVIEW_COUNT = 10
-CSV_MAX       = 1000
-PAGE_SIZE     = 20
-WAIT_PHONE    = 10
+CSV_MAX = 1000
+PAGE_SIZE = 20
+WAIT_PHONE = 10
 
 # ====== INIT ======
 init_db()
 dfs = DataForSEO(DFS_LOGIN, DFS_PASS, DFS_BASE)
 
-# ====== Утиліти UI ======
+
+# ====== Утиліти / меню ======
+def _uah_to_credits(amount_uah: float) -> int:
+    return max(1, math.ceil(amount_uah / CREDIT_PRICE_UAH))
+
+def _registered(uid: int) -> bool:
+    return bool(get_phone(uid))
+
+def _provider_label(provider: str) -> str:
+    return "LiqPay" if provider == "liqpay" else ("WayForPay" if provider in ("wayforpay", "wfp") else provider)
+
 def main_menu_keyboard(registered: bool) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton("🧰 Тули"), KeyboardButton("📊 Баланс")],
-        [KeyboardButton("💳 Поповнити")],
+        [KeyboardButton("💳 Поповнити")]
     ]
     if not registered:
         rows.append([KeyboardButton("📱 Реєстрація")])
@@ -94,54 +104,6 @@ def tools_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🔗 Backlinks", callback_data="tool|backlinks")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="tools|back")]
     ])
-
-# ====== Допоміжні ======
-def _extract_items(resp: dict) -> List[dict]:
-    tasks = resp.get("tasks") or []
-    if not tasks:
-        return []
-    t = tasks[0] or {}
-    sc = t.get("status_code")
-    if sc and sc != 20000:
-        raise RuntimeError(t.get("status_message") or f"Task error: {sc}")
-    res = t.get("result") or []
-    if not res:
-        return []
-    return res[0].get("items") or []
-
-def _fmt_preview(items: List[dict], cap: int) -> str:
-    lines = []
-    for it in items[:cap]:
-        url_from = (it.get("page_from") or {}).get("url_from") or it.get("url_from")
-        anchor = (it.get("anchor") or "").strip()
-        first_seen = it.get("first_seen")
-        lines.append(f"• {url_from}\n  anchor: {anchor[:80]} | first_seen: {first_seen}")
-    return "\n".join(lines)
-
-def _items_to_csv_bytes(items: List[dict]) -> bytes:
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["url_from", "url_to", "anchor", "dofollow", "first_seen", "last_seen", "domain_from"])
-    for it in items:
-        w.writerow([
-            (it.get("page_from") or {}).get("url_from") or it.get("url_from"),
-            it.get("url_to"),
-            (it.get("anchor") or "").replace("\n", " ").strip(),
-            it.get("dofollow"),
-            it.get("first_seen"),
-            it.get("last_visited"),
-            it.get("domain_from")
-        ])
-    return buf.getvalue().encode()
-
-def _uah_to_credits(amount_uah: float) -> int:
-    return max(1, math.ceil(amount_uah / CREDIT_PRICE_UAH))
-
-def _registered(uid: int) -> bool:
-    return bool(get_phone(uid))
-
-def _provider_label(provider: str) -> str:
-    return "LiqPay" if provider == "liqpay" else ("WayForPay" if provider in ("wayforpay", "wfp") else provider)
 
 def _build_topup_amounts_kb(provider: str) -> InlineKeyboardMarkup:
     rows = []
@@ -163,6 +125,46 @@ def _providers_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🧾 Portmone (скоро)", callback_data="provider_soon|portmone")],
     ])
 
+
+# ====== DataForSEO helpers ======
+def _extract_items(resp: dict) -> List[dict]:
+    tasks = resp.get("tasks") or []
+    if not tasks:
+        return []
+    t = tasks[0] or {}
+    if t.get("status_code") and t["status_code"] != 20000:
+        raise RuntimeError(t.get("status_message") or f"Task error: {t.get('status_code')}")
+    res = t.get("result") or []
+    if not res:
+        return []
+    return res[0].get("items") or []
+
+def _fmt_backlinks_preview(items: List[dict], cap: int) -> str:
+    lines = []
+    for it in items[:cap]:
+        url_from = (it.get("page_from") or {}).get("url_from") or it.get("url_from")
+        anchor = (it.get("anchor") or "").replace("\n", " ").strip()
+        first_seen = it.get("first_seen")
+        lines.append(f"• {url_from}\n  anchor: {anchor[:80]} | first_seen: {first_seen}")
+    return "\n".join(lines)
+
+def _items_to_csv_bytes(items: List[dict]) -> bytes:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["url_from", "url_to", "anchor", "dofollow", "first_seen", "last_seen", "domain_from"])
+    for it in items:
+        w.writerow([
+            (it.get("page_from") or {}).get("url_from") or it.get("url_from"),
+            it.get("url_to"),
+            (it.get("anchor") or "").replace("\n", " ").strip(),
+            it.get("dofollow"),
+            it.get("first_seen"),
+            it.get("last_visited"),
+            it.get("domain_from")
+        ])
+    return buf.getvalue().encode()
+
+
 # ====== /start ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -180,6 +182,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             param = parts[1].strip()
 
     if param == TELEGRAM_START_PARAM:
+        # Повернення з оплати
         await update.message.reply_text(
             "Дякуємо! Якщо платіж пройшов, баланс оновиться протягом хвилини.\n"
             "Перевірте /balance або натисніть «📊 Баланс».",
@@ -199,25 +202,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, reply_markup=main_menu_keyboard(reg))
 
-# ====== Тули: екран ======
-async def open_tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🧰 *Меню тулів*\n\n"
-        "Оберіть інструмент:\n"
-        "• 🔎 Research — підбір ключових слів\n"
-        "• 📊 SERP Checker — топ видачі по ключу\n"
-        "• 🆚 Keyword Gap — ключі конкурентів, яких у вас нема\n"
-        "• 🔗 Backlinks — робота з беклінками"
-    )
-    if update.message:
-        await update.message.reply_text(text, reply_markup=tools_menu_kb(), parse_mode="Markdown")
-    else:
-        await update.callback_query.edit_message_text(text, reply_markup=tools_menu_kb(), parse_mode="Markdown")
 
 # ====== Реєстрація ======
 def _normalize_phone(p: str) -> str:
     digits = "".join(ch for ch in p if ch.isdigit())
-    return ("+" + digits) if digits and not p.strip().startswith("+") else (p if p.startswith("+") else "+" + digits)
+    if not digits:
+        return ""
+    return ("+" + digits) if not p.strip().startswith("+") else p
 
 async def register_cmd_or_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -260,6 +251,7 @@ async def cancel_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Скасовано.", reply_markup=main_menu_keyboard(_registered(update.effective_user.id)))
     return ConversationHandler.END
 
+
 # ====== Баланс ======
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -268,7 +260,8 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reg_text = "✅ телефон додано" if _registered(uid) else "❌ немає телефону (використайте Реєстрація)"
     await update.message.reply_text(f"Баланс: {bal} кредитів\nРеєстрація: {reg_text}")
 
-# ====== Поповнення: провайдери/суми ======
+
+# ====== Поповнення ======
 async def topup_providers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = _providers_kb()
     text = "💰 *Поповнення балансу*\n\nОберіть провайдера оплати."
@@ -286,9 +279,10 @@ async def open_amounts(update: Update, context: ContextTypes.DEFAULT_TYPE, provi
     else:
         await update.callback_query.edit_message_text(msg, reply_markup=kb)
 
-# ====== Backlinks (команда) ======
+
+# ====== Backlinks ======
 async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = update.message.text.split()[1:]
+    args = (update.message.text or "").split()[1:]
     if not args:
         return await update.message.reply_text("Приклад: `/backlinks yourdomain.com`", parse_mode="Markdown")
     domain = args[0].strip()
@@ -309,26 +303,50 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-# ====== Обробка текстового вводу для тулів ======
+
+# ====== Тули: меню + ввід параметрів ======
+async def open_tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🧰 *Меню тулів*\n\n"
+        "Оберіть інструмент:\n"
+        "• 🔎 Research — підбір ключових слів\n"
+        "• 📊 SERP Checker — топ видачі по ключу\n"
+        "• 🆚 Keyword Gap — ключі конкурентів, яких у вас нема\n"
+        "• 🔗 Backlinks — перегляд/експорт"
+    )
+    if update.message:
+        await update.message.reply_text(text, reply_markup=tools_menu_kb(), parse_mode="Markdown")
+    else:
+        await update.callback_query.edit_message_text(text, reply_markup=tools_menu_kb(), parse_mode="Markdown")
+
+
 async def on_tool_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обробляємо текст користувача лише якщо контекст каже, що чекаємо параметри інструменту.
+    ВАЖЛИВО: цей хендлер зареєстровано з block=False у main(), щоб інші текстові хендлери працювали.
+    """
     uid = update.effective_user.id
     ensure_user(uid)
     awaiting = context.user_data.get("await_tool")
     if not awaiting:
-        return  # не наш кейс
+        return  # пропускаємо далі на on_menu_text
 
     text = (update.message.text or "").strip()
+
     try:
         if awaiting == "research":
-            # очікуємо "seed, cc" або просто "seed"
+            # формат: "seed, cc" або просто "seed"
             if "," in text:
                 seed, cc = [x.strip() for x in text.split(",", 1)]
             else:
                 seed, cc = text, "us"
+
             need_credits = _uah_to_credits(RESEARCH_CHARGE_UAH)
             if not charge(uid, need_credits, "research", seed):
-                return await update.message.reply_text(f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
-            data_resp = await dfs.keyword_suggestions(seed, cc)
+                return await update.message.reply_text(
+                    f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
+
+            data_resp = await dfs.keyword_suggestions(seed, cc.lower())
             items = _extract_items(data_resp) or []
             preview = []
             for it in items[:10]:
@@ -337,17 +355,21 @@ async def on_tool_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 preview.append(f"• {kw} — vol: {vol}")
             bal_now = get_balance(uid)
             msg = "Нічого не знайдено." if not preview else "\n".join(preview)
-            return await update.message.reply_text(f"{msg}\n\n💰 Списано {need_credits}. Баланс: {bal_now}")
+            await update.message.reply_text(f"{msg}\n\n💰 Списано {need_credits}. Баланс: {bal_now}")
+            return
 
         if awaiting == "serp":
             if "," in text:
                 kw, cc = [x.strip() for x in text.split(",", 1)]
             else:
                 kw, cc = text, "us"
+
             need_credits = _uah_to_credits(SERP_CHARGE_UAH)
             if not charge(uid, need_credits, "serp", kw):
-                return await update.message.reply_text(f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
-            data_resp = await dfs.serp_organic(kw, cc, limit=10)
+                return await update.message.reply_text(
+                    f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
+
+            data_resp = await dfs.serp_organic(kw, cc.lower(), limit=10)
             items = _extract_items(data_resp) or []
             lines = []
             for i, it in enumerate(items[:10], 1):
@@ -356,22 +378,26 @@ async def on_tool_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"{i}. {title[:70]} — {url}")
             bal_now = get_balance(uid)
             msg = "Нічого не знайдено." if not lines else "\n".join(lines)
-            return await update.message.reply_text(f"{msg}\n\n💰 Списано {need_credits}. Баланс: {bal_now}")
+            await update.message.reply_text(f"{msg}\n\n💰 Списано {need_credits}. Баланс: {bal_now}")
+            return
 
         if awaiting == "gap":
             # формат: my.com vs c1.com, c2.com
-            low = text.lower()
-            if " vs " not in low:
-                return await update.message.reply_text("Формат: `yourdomain.com vs competitor1.com, competitor2.com`", parse_mode="Markdown")
+            if " vs " not in text.lower():
+                return await update.message.reply_text(
+                    "Формат: `yourdomain.com vs competitor1.com, competitor2.com`", parse_mode="Markdown")
             left, right = text.split(" vs ", 1)
             your = left.strip()
             comps = [c.strip().strip(",") for c in right.split(",") if c.strip()]
             if not your or not comps:
                 return await update.message.reply_text("Вкажіть домен та щонайменше 1 конкурента.")
+
             need_credits = _uah_to_credits(GAP_CHARGE_UAH)
             if not charge(uid, need_credits, "gap", f"{your} vs {','.join(comps)}"):
-                return await update.message.reply_text(f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
-            data_resp = await dfs.keyword_gap(your, comps, limit=20)
+                return await update.message.reply_text(
+                    f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
+
+            data_resp = await dfs.keyword_gap(your, comps, limit=20)  # поки плейсхолдер
             items = _extract_items(data_resp) or []
             lines = []
             for it in items[:20]:
@@ -381,18 +407,22 @@ async def on_tool_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"• {kw} — vol: {vol} — у: {who}")
             bal_now = get_balance(uid)
             msg = "Нічого не знайдено." if not lines else "\n".join(lines)
-            return await update.message.reply_text(f"{msg}\n\n💰 Списано {need_credits}. Баланс: {bal_now}")
+            await update.message.reply_text(f"{msg}\n\n💰 Списано {need_credits}. Баланс: {bal_now}")
+            return
 
     except HTTPError as e:
-        log.exception("DataForSEO HTTP error")
-        return await update.message.reply_text(f"DataForSEO HTTP error: {e}")
+        await update.message.reply_text(f"DataForSEO HTTP error: {e}")
+        return
     except Exception as e:
         log.exception("tool error")
-        return await update.message.reply_text(f"Помилка: {e}")
+        await update.message.reply_text(f"Помилка: {e}")
+        return
     finally:
+        # очищаємо стан очікування
         context.user_data.pop("await_tool", None)
 
-# ====== CALLBACKS (topup & backlinks & tools) ======
+
+# ====== CALLBACKS (inline кнопки: тулі/поповнення/беклінки/адмін) ======
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -409,21 +439,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cmd = parts[0]
 
-    # --- Екран вибору провайдера / повернення назад ---
-    if cmd == "topup_providers":
-        return await topup_providers(update, context)
-
-    # --- Відкрити вибір сум для провайдера ---
-    if cmd == "open_amounts":
-        provider = (parts[1] if len(parts) > 1 else "liqpay").lower()
-        return await open_amounts(update, context, provider)
-
-    # --- Ще не підключені провайдери ---
-    if cmd == "provider_soon":
-        label = _provider_label(parts[1] if len(parts) > 1 else "")
-        return await query.answer(f"{label} ще не підключено", show_alert=False)
-
-    # --- Меню тулів (inline) ---
+    # --- Меню тулів (Назад) ---
     if cmd == "tools" and len(parts) > 1 and parts[1] == "back":
         reg = _registered(uid)
         try:
@@ -433,33 +449,43 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=uid, text="Головне меню:", reply_markup=main_menu_keyboard(reg))
         return
 
+    # --- Обрати тул ---
     if cmd == "tool":
         tool = parts[1] if len(parts) > 1 else ""
         if tool == "research":
             context.user_data["await_tool"] = "research"
             return await query.edit_message_text(
-                "🔎 *Research*\nНадішліть запит у форматі: `seed_keyword, country_code`\n"
-                "Напр.: `seo audit, ua` або `coffee, us`",
+                "🔎 *Research*\nНадішліть: `seed_keyword, country_code`\nНапр.: `coffee, us` або `seo audit, ua`",
                 parse_mode="Markdown"
             )
         if tool == "serp":
             context.user_data["await_tool"] = "serp"
             return await query.edit_message_text(
-                "📊 *SERP Checker*\nНадішліть запит у форматі: `keyword, country_code`\n"
-                "Напр.: `best vpn, us` або `купити ноутбук, ua`",
+                "📊 *SERP Checker*\nНадішліть: `keyword, country_code`\nНапр.: `best vpn, us` або `купити ноутбук, ua`",
                 parse_mode="Markdown"
             )
         if tool == "gap":
             context.user_data["await_tool"] = "gap"
             return await query.edit_message_text(
-                "🆚 *Keyword Gap*\nНадішліть запит у форматі: `yourdomain.com vs competitor1.com, competitor2.com`",
+                "🆚 *Keyword Gap*\nНадішліть: `yourdomain.com vs competitor1.com, competitor2.com`",
                 parse_mode="Markdown"
             )
         if tool == "backlinks":
             context.user_data.pop("await_tool", None)
             return await query.edit_message_text("Введіть команду: `/backlinks yourdomain.com`", parse_mode="Markdown")
 
-    # --- Поповнення (створення інвойсу) ---
+    # --- Поповнення: меню провайдерів / суми ---
+    if cmd == "topup_providers":
+        return await topup_providers(update, context)
+
+    if cmd == "open_amounts":
+        provider = (parts[1] if len(parts) > 1 else "liqpay").lower()
+        return await open_amounts(update, context, provider)
+
+    if cmd == "provider_soon":
+        label = _provider_label(parts[1] if len(parts) > 1 else "")
+        return await query.answer(f"{label} ще не підключено", show_alert=False)
+
     if cmd == "topup":
         provider = (parts[1] if len(parts) > 1 else "liqpay").lower()
         amount_raw = parts[2] if len(parts) > 2 else ""
@@ -474,7 +500,6 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 return
 
-        # стукаємось у наш бекенд
         try:
             async with AsyncClient(timeout=20) as c:
                 r = await c.post(
@@ -523,7 +548,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # --- Платні дії (backlinks) ---
+    # --- Платні дії (backlinks show/csv) ---
     if cmd in ("show", "csv") and len(parts) == 3:
         _, domain, scope = parts
         need_credits = _uah_to_credits(BACKLINKS_CHARGE_UAH)
@@ -551,13 +576,13 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if cmd == "show":
                 cap = PREVIEW_COUNT if scope == "10" else min(50, len(items))
-                txt = _fmt_preview(items, cap)
+                txt = _fmt_backlinks_preview(items, cap)
                 bal_now = get_balance(uid)
                 if scope == "all" and len(items) > cap:
                     txt += f"\n\n…показано перші {cap} з {len(items)}."
                 txt += f"\n\n💰 Списано {need_credits} кредит(и). Новий баланс: {bal_now}"
                 await query.edit_message_text(txt)
-            else:  # csv
+            else:
                 csv_bytes = _items_to_csv_bytes(items)
                 bal_now = get_balance(uid)
                 await query.message.reply_document(
@@ -573,28 +598,32 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"Помилка: {e}")
         return
 
-    # --- Все інше (застарілі або невідомі кнопки) ---
+    # --- Все інше ---
     try:
-        return await query.edit_message_text("Кнопка застаріла або формат невірний. Відкрийте меню ще раз: /topup")
+        return await query.edit_message_text("Кнопка застаріла або формат невірний. Відкрийте меню ще раз.")
     except Exception:
         return
 
-# ====== Обробка меню (клавіша) ======
+
+# ====== Меню-тексти (ReplyKeyboard) ======
 async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
 
-    if text == "💳 Поповнити":
-        return await topup_providers(update, context)
+    if text == "🧰 Тули":
+        return await open_tools_menu(update, context)
     if text == "📊 Баланс":
         return await balance(update, context)
+    if text == "💳 Поповнити":
+        return await topup_providers(update, context)
     if text == "📱 Реєстрація":
         if _registered(uid):
             return await update.message.reply_text("Ви вже зареєстровані ✅", reply_markup=main_menu_keyboard(True))
         return await register_cmd_or_menu(update, context)
-    # підказка для окремої кнопки Backlinks (залишив на сумісність)
-    if text == "🔗 Backlinks":
-        return await update.message.reply_text("Введіть команду у форматі: /backlinks yourdomain.com")
+
+    # якщо якийсь інший текст — просто підкажемо
+    return await update.message.reply_text("Обери дію з меню нижче 🙂", reply_markup=main_menu_keyboard(_registered(uid)))
+
 
 # ====== АДМІНКА ======
 def _db() -> sqlite3.Connection:
@@ -654,6 +683,7 @@ async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = _render_users_page(page)
         return await query.edit_message_text(text, reply_markup=_admin_kb(page))
 
+
 # ====== MAIN ======
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -663,7 +693,6 @@ def main():
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("topup", topup_providers))
     app.add_handler(CommandHandler("backlinks", backlinks))
-    app.add_handler(CommandHandler("admin", admin_cmd))
 
     # Реєстрація — розмова
     reg_conv = ConversationHandler(
@@ -677,19 +706,25 @@ def main():
     )
     app.add_handler(reg_conv)
 
-    # Callback’и (admin / tools / providers / amounts / topup / backlinks)
+    # Адмінка
+    app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(on_admin_cb, pattern=r"^admin\|"))
+
+    # Inline callback’и (тулів/поповнення/беклінків)
     app.add_handler(CallbackQueryHandler(on_choice))
 
-    # Меню "🧰 Тули" і ввід для тулів — СПЕЦИФІЧНІ (мають стояти вище загального)
+    # Вузький хендлер для кнопки Тули (ReplyKeyboard)
     app.add_handler(MessageHandler(filters.Regex(r"^🧰 Тули$"), open_tools_menu))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_tool_input))
 
-    # Загальний текстовий обробник меню — ОСТАННІЙ
+    # Ввід параметрів тулів — НЕ блокує інші текстові хендлери
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_tool_input, block=False))
+
+    # Загальний обробник текстових натискань меню (Баланс/Поповнити/Реєстрація/тощо)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_menu_text))
 
     log.info("Bot started. DFS_BASE=%s BACKEND_BASE=%s PUBLIC_BASE=%s", DFS_BASE, BACKEND_BASE, PUBLIC_BASE)
     app.run_polling(close_loop=False)
+
 
 if __name__ == "__main__":
     main()
