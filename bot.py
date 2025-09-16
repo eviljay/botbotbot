@@ -139,44 +139,33 @@ def services_menu_keyboard() -> ReplyKeyboardMarkup:
 
 async def _set_menu_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE, kb: ReplyKeyboardMarkup):
     """
-    Перемикає нижнє (reply) меню.
-    1) Прагнемо редагувати попереднє бот-повідомлення (без шуму).
-    2) Якщо нема що редагувати — шлемо короткий плейсхолдер "·" з клавіатурою
-       і ВІДРАЗУ його видаляємо (клавіатура залишиться).
+    Перемикає нижнє (reply) меню:
+    1) надсилаємо непомітне повідомлення з потрібною ReplyKeyboardMarkup
+    2) через мить видаляємо це повідомлення — клавіатура залишиться активною
     """
     chat_id = update.effective_chat.id
-    last_id = context.chat_data.get("menu_msg_id")
 
-    # 1) редагуємо, якщо є що
-    if last_id:
-        try:
-            await context.bot.edit_message_reply_markup(
-                chat_id=chat_id, message_id=last_id, reply_markup=kb
-            )
-            return
-        except TelegramError:
-            # впадемо у варіант з плейсхолдером
-            pass
-
-    # 2) плейсхолдер з клавою -> видаляємо через мить
+    # Надсилаємо плейсхолдер з новою reply-клавою
     msg = await context.bot.send_message(
         chat_id=chat_id,
-        text="·",                     # дуже непомітний символ
+        text="·",
         reply_markup=kb,
         disable_notification=True,
         allow_sending_without_reply=True,
     )
-    context.chat_data["menu_msg_id"] = msg.message_id
 
-    # спробуємо акуратно прибрати "·", клавіатура залишиться активною
+    # Акуратно видаляємо плейсхолдер (клава залишиться)
     try:
         await asyncio.sleep(0.25)
         await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-        # НЕ чистимо menu_msg_id: він стане непридатним для редагування — це ок.
-        # Наступний раз знову підемо плейсхолдером без шуму.
     except TelegramError:
-        # якщо не вдалося — нічого страшного, хай залишиться точка
         pass
+    # --- Повернення з інлайн-меню сервісів ---
+    if cmd == "services_back":
+        # Просто підкажемо і повернемо нижнє головне меню
+        await query.edit_message_text("Повернувся до головного меню. Користуйся нижніми кнопками ⬇️")
+        await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(uid)))
+        return
 
 def _extract_first_items(resp: dict) -> List[dict]:
     tasks = resp.get("tasks") or []
