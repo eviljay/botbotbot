@@ -210,7 +210,7 @@ async def keywords_gap(
         "/v3/dataforseo_labs/google/keyword_intersections/live",
         [task]
     )
-
+ 
 
     # ========= On-Page instant =========
     async def onpage_instant(self, url: str):
