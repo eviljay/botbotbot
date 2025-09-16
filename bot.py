@@ -39,49 +39,48 @@ log = logging.getLogger("bot")
 
 # ====== ENV ======
 load_dotenv()
-TELEGRAM_BOT_URL     = os.getenv("TELEGRAM_BOT_URL", "")        # наприклад: https://t.me/YourBotName
-TELEGRAM_START_PARAM = os.getenv("TELEGRAM_START_PARAM", "paid") # опціонально
+
+TELEGRAM_BOT_URL     = os.getenv("TELEGRAM_BOT_URL", "")
+TELEGRAM_START_PARAM = os.getenv("TELEGRAM_START_PARAM", "paid")
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 DFS_LOGIN = os.environ["DATAFORSEO_LOGIN"]
-DFS_PASS = os.environ["DATAFORSEO_PASSWORD"]
-DFS_BASE = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
+DFS_PASS  = os.environ["DATAFORSEO_PASSWORD"]
+DFS_BASE  = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
 
 # внутрішній бекенд (локальний API)
 BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8001").rstrip("/")
 # публічний домен (на випадок, якщо колись доведеться дати /pay/{order_id})
 PUBLIC_BASE  = os.getenv("PUBLIC_BASE", "https://server1.seoswiss.online").rstrip("/")
 
-CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
-BACKLINKS_CHARGE_UAH = float(os.getenv("BACKLINKS_CHARGE_UAH", "5"))
-INITIAL_BONUS = int(os.getenv("INITIAL_BONUS", "10"))
-TOPUP_OPTIONS = [int(x.strip()) for x in os.getenv("TOPUP_OPTIONS", "100,250,500").split(",") if x.strip().isdigit()]
-# ====== PRICING FOR TOOLS ======
-RESEARCH_CHARGE_UAH = float(os.getenv("RESEARCH_CHARGE_UAH", "5"))
-SERP_CHARGE_UAH     = float(os.getenv("SERP_CHARGE_UAH", "5"))
-GAP_CHARGE_UAH      = float(os.getenv("GAP_CHARGE_UAH", "5"))
-
-
+# Ціни/кредити
+CREDIT_PRICE_UAH       = float(os.getenv("CREDIT_PRICE_UAH", "5"))
+BACKLINKS_CHARGE_UAH   = float(os.getenv("BACKLINKS_CHARGE_UAH", "5"))
+RESEARCH_CHARGE_UAH    = float(os.getenv("RESEARCH_CHARGE_UAH", "5"))
+SERP_CHARGE_UAH        = float(os.getenv("SERP_CHARGE_UAH", "5"))
+GAP_CHARGE_UAH         = float(os.getenv("GAP_CHARGE_UAH", "5"))
+INITIAL_BONUS          = int(os.getenv("INITIAL_BONUS", "10"))
+TOPUP_OPTIONS          = [int(x.strip()) for x in os.getenv("TOPUP_OPTIONS", "100,250,500").split(",") if x.strip().isdigit()]
 
 # для адмінки
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
-DB_PATH = os.getenv("DB_PATH", "bot.db")  # очікувана БД, яку використовує dao.py
+DB_PATH   = os.getenv("DB_PATH", "bot.db")
 
+# Інші константи
 PREVIEW_COUNT = 10
-CSV_MAX = 1000
-PAGE_SIZE = 20
-WAIT_PHONE = 10
+CSV_MAX       = 1000
+PAGE_SIZE     = 20
+WAIT_PHONE    = 10
 
 # ====== INIT ======
 init_db()
 dfs = DataForSEO(DFS_LOGIN, DFS_PASS, DFS_BASE)
 
-# ====== Утиліти ======
+# ====== Утиліти UI ======
 def main_menu_keyboard(registered: bool) -> ReplyKeyboardMarkup:
-    # Коротке головне меню: Тули / Баланс / Поповнити (+ Реєстрація якщо треба)
     rows = [
         [KeyboardButton("🧰 Тули"), KeyboardButton("📊 Баланс")],
-        [KeyboardButton("💳 Поповнити")]
+        [KeyboardButton("💳 Поповнити")],
     ]
     if not registered:
         rows.append([KeyboardButton("📱 Реєстрація")])
@@ -96,29 +95,15 @@ def tools_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⬅️ Назад", callback_data="tools|back")]
     ])
 
-
-async def open_tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🧰 *Меню тулів*\n\n"
-        "Оберіть інструмент:\n"
-        "• 🔎 Research — підбір ключових слів\n"
-        "• 📊 SERP Checker — топ видачі по ключу\n"
-        "• 🆚 Keyword Gap — ключі конкурентів, яких у вас нема\n"
-        "• 🔗 Backlinks — робота з беклінками"
-    )
-    if update.message:
-        await update.message.reply_text(text, reply_markup=tools_menu_kb(), parse_mode="Markdown")
-    else:
-        await update.callback_query.edit_message_text(text, reply_markup=tools_menu_kb(), parse_mode="Markdown")
-
-
+# ====== Допоміжні ======
 def _extract_items(resp: dict) -> List[dict]:
     tasks = resp.get("tasks") or []
     if not tasks:
         return []
     t = tasks[0] or {}
-    if t.get("status_code") and t["status_code"] != 20000:
-        raise RuntimeError(t.get("status_message") or f"Task error: {t.get('status_code')}")
+    sc = t.get("status_code")
+    if sc and sc != 20000:
+        raise RuntimeError(t.get("status_message") or f"Task error: {sc}")
     res = t.get("result") or []
     if not res:
         return []
@@ -158,7 +143,6 @@ def _registered(uid: int) -> bool:
 def _provider_label(provider: str) -> str:
     return "LiqPay" if provider == "liqpay" else ("WayForPay" if provider in ("wayforpay", "wfp") else provider)
 
-# ====== Клавіатури ======
 def _build_topup_amounts_kb(provider: str) -> InlineKeyboardMarkup:
     rows = []
     for amount in TOPUP_OPTIONS:
@@ -196,7 +180,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             param = parts[1].strip()
 
     if param == TELEGRAM_START_PARAM:
-        # Повернення з оплати
         await update.message.reply_text(
             "Дякуємо! Якщо платіж пройшов, баланс оновиться протягом хвилини.\n"
             "Перевірте /balance або натисніть «📊 Баланс».",
@@ -207,7 +190,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "Привіт! Я SEO-бот з балансом.\n\n"
         "Команди/меню:\n"
-        "🔗 Backlinks — отримати останні або всі беклінки й CSV\n"
+        "🧰 Тули — інструменти Research/SERP/Gap/Backlinks\n"
         "💳 Поповнити — оплата через LiqPay або WayForPay\n"
         "📊 Баланс — показати ваш баланс\n"
         "📱 Реєстрація — додати телефон (новим — бонус)\n\n"
@@ -215,6 +198,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Ваш баланс: {bal} кредитів"
     )
     await update.message.reply_text(text, reply_markup=main_menu_keyboard(reg))
+
+# ====== Тули: екран ======
+async def open_tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🧰 *Меню тулів*\n\n"
+        "Оберіть інструмент:\n"
+        "• 🔎 Research — підбір ключових слів\n"
+        "• 📊 SERP Checker — топ видачі по ключу\n"
+        "• 🆚 Keyword Gap — ключі конкурентів, яких у вас нема\n"
+        "• 🔗 Backlinks — робота з беклінками"
+    )
+    if update.message:
+        await update.message.reply_text(text, reply_markup=tools_menu_kb(), parse_mode="Markdown")
+    else:
+        await update.callback_query.edit_message_text(text, reply_markup=tools_menu_kb(), parse_mode="Markdown")
 
 # ====== Реєстрація ======
 def _normalize_phone(p: str) -> str:
@@ -270,19 +268,15 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reg_text = "✅ телефон додано" if _registered(uid) else "❌ немає телефону (використайте Реєстрація)"
     await update.message.reply_text(f"Баланс: {bal} кредитів\nРеєстрація: {reg_text}")
 
-# ====== Поповнення: вибір провайдера ======
+# ====== Поповнення: провайдери/суми ======
 async def topup_providers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = _providers_kb()
-    text = (
-        "💰 *Поповнення балансу*\n\n"
-        "Оберіть провайдера оплати."
-    )
+    text = "💰 *Поповнення балансу*\n\nОберіть провайдера оплати."
     if update.message:
         await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
     else:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
-# ====== Поповнення: вибір суми (для конкретного провайдера) ======
 async def open_amounts(update: Update, context: ContextTypes.DEFAULT_TYPE, provider: str):
     label = _provider_label(provider)
     msg = f"Оберіть суму поповнення ({label}):"
@@ -292,7 +286,7 @@ async def open_amounts(update: Update, context: ContextTypes.DEFAULT_TYPE, provi
     else:
         await update.callback_query.edit_message_text(msg, reply_markup=kb)
 
-# ====== Backlinks ======
+# ====== Backlinks (команда) ======
 async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = update.message.text.split()[1:]
     if not args:
@@ -314,6 +308,8 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode="Markdown",
     )
+
+# ====== Обробка текстового вводу для тулів ======
 async def on_tool_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     ensure_user(uid)
@@ -324,19 +320,16 @@ async def on_tool_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     try:
         if awaiting == "research":
-            # розбір "seed, cc"
+            # очікуємо "seed, cc" або просто "seed"
             if "," in text:
                 seed, cc = [x.strip() for x in text.split(",", 1)]
             else:
                 seed, cc = text, "us"
             need_credits = _uah_to_credits(RESEARCH_CHARGE_UAH)
             if not charge(uid, need_credits, "research", seed):
-                return await update.message.reply_text(
-                    f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
-            # виклик DFS
-            data_resp = await dfs.keyword_suggestions(seed, cc.lower())
+                return await update.message.reply_text(f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
+            data_resp = await dfs.keyword_suggestions(seed, cc)
             items = _extract_items(data_resp) or []
-            # короткий вивід
             preview = []
             for it in items[:10]:
                 kw = it.get("keyword") or it.get("text") or ""
@@ -353,9 +346,8 @@ async def on_tool_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 kw, cc = text, "us"
             need_credits = _uah_to_credits(SERP_CHARGE_UAH)
             if not charge(uid, need_credits, "serp", kw):
-                return await update.message.reply_text(
-                    f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
-            data_resp = await dfs.serp_organic(kw, cc.lower(), limit=10)
+                return await update.message.reply_text(f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
+            data_resp = await dfs.serp_organic(kw, cc, limit=10)
             items = _extract_items(data_resp) or []
             lines = []
             for i, it in enumerate(items[:10], 1):
@@ -368,9 +360,9 @@ async def on_tool_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if awaiting == "gap":
             # формат: my.com vs c1.com, c2.com
-            if " vs " not in text.lower():
-                return await update.message.reply_text(
-                    "Формат: `yourdomain.com vs competitor1.com, competitor2.com`", parse_mode="Markdown")
+            low = text.lower()
+            if " vs " not in low:
+                return await update.message.reply_text("Формат: `yourdomain.com vs competitor1.com, competitor2.com`", parse_mode="Markdown")
             left, right = text.split(" vs ", 1)
             your = left.strip()
             comps = [c.strip().strip(",") for c in right.split(",") if c.strip()]
@@ -378,10 +370,8 @@ async def on_tool_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return await update.message.reply_text("Вкажіть домен та щонайменше 1 конкурента.")
             need_credits = _uah_to_credits(GAP_CHARGE_UAH)
             if not charge(uid, need_credits, "gap", f"{your} vs {','.join(comps)}"):
-                return await update.message.reply_text(
-                    f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
+                return await update.message.reply_text(f"Недостатньо кредитів (потрібно {need_credits}). Скористайтесь «💳 Поповнити».")
             data_resp = await dfs.keyword_gap(your, comps, limit=20)
-            # очікуємо масив ключів, яких нема у your, але є у конкурентів
             items = _extract_items(data_resp) or []
             lines = []
             for it in items[:20]:
@@ -394,25 +384,15 @@ async def on_tool_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text(f"{msg}\n\n💰 Списано {need_credits}. Баланс: {bal_now}")
 
     except HTTPError as e:
+        log.exception("DataForSEO HTTP error")
         return await update.message.reply_text(f"DataForSEO HTTP error: {e}")
     except Exception as e:
         log.exception("tool error")
         return await update.message.reply_text(f"Помилка: {e}")
     finally:
-        # очищаємо стан очікування
         context.user_data.pop("await_tool", None)
 
-
-
-    # Відкрити меню тулів
-    app.add_handler(MessageHandler(filters.Regex(r"^🧰 Тули$"), open_tools_menu))
-
-    # Обробка текстового вводу параметрів після вибору тулу
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_tool_input))
-
-
-
-# ====== CALLBACKS (topup & backlinks) ======
+# ====== CALLBACKS (topup & backlinks & tools) ======
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -443,11 +423,8 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         label = _provider_label(parts[1] if len(parts) > 1 else "")
         return await query.answer(f"{label} ще не підключено", show_alert=False)
 
-
-
-        # --- Меню тулів (inline) ---
+    # --- Меню тулів (inline) ---
     if cmd == "tools" and len(parts) > 1 and parts[1] == "back":
-        # Повертаємося до головного меню (просто замінимо повідомлення)
         reg = _registered(uid)
         try:
             await query.edit_message_text("Повернулися в головне меню. Оберіть дію з клавіатури нижче.")
@@ -458,12 +435,11 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if cmd == "tool":
         tool = parts[1] if len(parts) > 1 else ""
-        # Маркуємо, що чекаємо наступне повідомлення з параметрами
         if tool == "research":
             context.user_data["await_tool"] = "research"
             return await query.edit_message_text(
                 "🔎 *Research*\nНадішліть запит у форматі: `seed_keyword, country_code`\n"
-                "Напр.: `coffee, us` або `seo audit, ua`",
+                "Напр.: `seo audit, ua` або `coffee, us`",
                 parse_mode="Markdown"
             )
         if tool == "serp":
@@ -476,25 +452,17 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if tool == "gap":
             context.user_data["await_tool"] = "gap"
             return await query.edit_message_text(
-                "🆚 *Keyword Gap*\nНадішліть запит у форматі: `yourdomain.com vs competitor1.com, competitor2.com`\n"
-                "Хоча б 1 конкурент. Напр.: `mysite.com vs site1.com, site2.com`",
+                "🆚 *Keyword Gap*\nНадішліть запит у форматі: `yourdomain.com vs competitor1.com, competitor2.com`",
                 parse_mode="Markdown"
             )
         if tool == "backlinks":
             context.user_data.pop("await_tool", None)
             return await query.edit_message_text("Введіть команду: `/backlinks yourdomain.com`", parse_mode="Markdown")
 
-
-
-
-
-
-
     # --- Поповнення (створення інвойсу) ---
     if cmd == "topup":
         provider = (parts[1] if len(parts) > 1 else "liqpay").lower()
         amount_raw = parts[2] if len(parts) > 2 else ""
-        # дозволяємо «брудні» значення:  "100₴", "100.0", "100 грн"
         amount_clean = re.sub(r"[^\d.]", "", str(amount_raw))
         try:
             amount_uah = int(float(amount_clean))
@@ -543,14 +511,12 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         label = _provider_label(provider)
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"💳 Оплатити ({label})", url=pay_url)]])
-        # окремим повідомленням із кнопкою
         await context.bot.send_message(
             chat_id=uid,
             text=(f"Рахунок створено на {amount_uah}₴ ({label}).\n"
                   f"Натисніть кнопку нижче або відкрийте лінк:\n{pay_url}"),
             reply_markup=kb
         )
-        # і прибираємо старе меню/пояснюємо
         try:
             await query.edit_message_text("Рахунок створено, дивись повідомлення з кнопкою нижче ⬇️")
         except Exception:
@@ -613,14 +579,11 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         return
 
-
-# ====== Обробка меню ======
+# ====== Обробка меню (клавіша) ======
 async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
 
-    if text == "🔗 Backlinks":
-        return await update.message.reply_text("Введіть команду у форматі: /backlinks yourdomain.com")
     if text == "💳 Поповнити":
         return await topup_providers(update, context)
     if text == "📊 Баланс":
@@ -629,6 +592,9 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _registered(uid):
             return await update.message.reply_text("Ви вже зареєстровані ✅", reply_markup=main_menu_keyboard(True))
         return await register_cmd_or_menu(update, context)
+    # підказка для окремої кнопки Backlinks (залишив на сумісність)
+    if text == "🔗 Backlinks":
+        return await update.message.reply_text("Введіть команду у форматі: /backlinks yourdomain.com")
 
 # ====== АДМІНКА ======
 def _db() -> sqlite3.Connection:
@@ -695,8 +661,9 @@ def main():
     # Команди
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance))
-    app.add_handler(CommandHandler("topup", topup_providers))  # /topup відкриває вибір провайдера
+    app.add_handler(CommandHandler("topup", topup_providers))
     app.add_handler(CommandHandler("backlinks", backlinks))
+    app.add_handler(CommandHandler("admin", admin_cmd))
 
     # Реєстрація — розмова
     reg_conv = ConversationHandler(
@@ -710,14 +677,15 @@ def main():
     )
     app.add_handler(reg_conv)
 
-    # Адмінка
-    app.add_handler(CommandHandler("admin", admin_cmd))
+    # Callback’и (admin / tools / providers / amounts / topup / backlinks)
     app.add_handler(CallbackQueryHandler(on_admin_cb, pattern=r"^admin\|"))
-
-    # Callback’и (providers / amounts / topup / backlinks)
     app.add_handler(CallbackQueryHandler(on_choice))
 
-    # Меню-тексти
+    # Меню "🧰 Тули" і ввід для тулів — СПЕЦИФІЧНІ (мають стояти вище загального)
+    app.add_handler(MessageHandler(filters.Regex(r"^🧰 Тули$"), open_tools_menu))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_tool_input))
+
+    # Загальний текстовий обробник меню — ОСТАННІЙ
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_menu_text))
 
     log.info("Bot started. DFS_BASE=%s BACKEND_BASE=%s PUBLIC_BASE=%s", DFS_BASE, BACKEND_BASE, PUBLIC_BASE)
