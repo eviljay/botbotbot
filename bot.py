@@ -39,17 +39,15 @@ log = logging.getLogger("bot")
 
 # ====== ENV ======
 load_dotenv()
-TELEGRAM_BOT_URL     = os.getenv("TELEGRAM_BOT_URL", "")        # наприклад: https://t.me/YourBotName
-TELEGRAM_START_PARAM = os.getenv("TELEGRAM_START_PARAM", "paid") # опціонально
+TELEGRAM_BOT_URL     = os.getenv("TELEGRAM_BOT_URL", "")
+TELEGRAM_START_PARAM = os.getenv("TELEGRAM_START_PARAM", "paid")
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 DFS_LOGIN = os.environ["DATAFORSEO_LOGIN"]
 DFS_PASS = os.environ["DATAFORSEO_PASSWORD"]
 DFS_BASE = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
 
-# внутрішній бекенд (локальний API)
 BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8001").rstrip("/")
-# публічний домен (на випадок, якщо колись доведеться дати /pay/{order_id})
 PUBLIC_BASE  = os.getenv("PUBLIC_BASE", "https://server1.seoswiss.online").rstrip("/")
 
 CREDIT_PRICE_UAH = float(os.getenv("CREDIT_PRICE_UAH", "5"))
@@ -57,9 +55,8 @@ BACKLINKS_CHARGE_UAH = float(os.getenv("BACKLINKS_CHARGE_UAH", "5"))
 INITIAL_BONUS = int(os.getenv("INITIAL_BONUS", "10"))
 TOPUP_OPTIONS = [int(x.strip()) for x in os.getenv("TOPUP_OPTIONS", "100,250,500").split(",") if x.strip().isdigit()]
 
-# для адмінки
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
-DB_PATH = os.getenv("DB_PATH", "bot.db")  # очікувана БД, яку використовує dao.py
+DB_PATH = os.getenv("DB_PATH", "bot.db")
 
 PREVIEW_COUNT = 10
 CSV_MAX = 1000
@@ -72,16 +69,14 @@ dfs = DataForSEO(DFS_LOGIN, DFS_PASS, DFS_BASE)
 
 # ====== Утиліти ======
 def main_menu_keyboard(registered: bool) -> ReplyKeyboardMarkup:
-    if registered:
-        rows = [
-            [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
-            [KeyboardButton("📊 Баланс")],
-        ]
-    else:
-        rows = [
-            [KeyboardButton("🔗 Backlinks"), KeyboardButton("💳 Поповнити")],
-            [KeyboardButton("📊 Баланс"), KeyboardButton("📱 Реєстрація")],
-        ]
+    rows = [
+        [KeyboardButton("🔎 SERP Топ-10"), KeyboardButton("🧠 Ключові слова")],
+        [KeyboardButton("🧩 Keyword Gap"), KeyboardButton("🔗 Backlinks")],
+        [KeyboardButton("🛠️ On-Page аудит"), KeyboardButton("📈 Огляд домену"), KeyboardButton("📰 Згадки бренду")],
+        [KeyboardButton("💳 Поповнити"), KeyboardButton("📊 Баланс")],
+    ]
+    if not registered:
+        rows[-1].append(KeyboardButton("📱 Реєстрація"))
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def _extract_items(resp: dict) -> List[dict]:
@@ -148,7 +143,6 @@ def _providers_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💳 LiqPay", callback_data="open_amounts|liqpay")],
         [InlineKeyboardButton("🏦 WayForPay", callback_data="open_amounts|wayforpay")],
-        [InlineKeyboardButton("🧾 Portmone (скоро)", callback_data="provider_soon|portmone")],
     ])
 
 # ====== /start ======
@@ -159,7 +153,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reg = _registered(uid)
     reg_text = "✅ телефон додано" if reg else "❌ немає телефону (використайте Реєстрація)"
 
-    # Deep-link /start <param>
     raw = (update.message.text or "").strip()
     param: Optional[str] = None
     if raw.startswith("/start"):
@@ -168,7 +161,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             param = parts[1].strip()
 
     if param == TELEGRAM_START_PARAM:
-        # Повернення з оплати
         await update.message.reply_text(
             "Дякуємо! Якщо платіж пройшов, баланс оновиться протягом хвилини.\n"
             "Перевірте /balance або натисніть «📊 Баланс».",
@@ -178,11 +170,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "Привіт! Я SEO-бот з балансом.\n\n"
-        "Команди/меню:\n"
-        "🔗 Backlinks — отримати останні або всі беклінки й CSV\n"
-        "💳 Поповнити — оплата через LiqPay або WayForPay\n"
-        "📊 Баланс — показати ваш баланс\n"
-        "📱 Реєстрація — додати телефон (новим — бонус)\n\n"
+        "Меню інструментів:\n"
+        "🔎 SERP Топ-10 — топ-результати Google\n"
+        "🧠 Ключові слова — ідеї, обсяг, CPC\n"
+        "🧩 Keyword Gap — перетин/пропуски ключів\n"
+        "🔗 Backlinks — швидкий перегляд та CSV\n"
+        "🛠️ On-Page аудит — технічні метрики URL\n"
+        "📈 Огляд домену — базові метрики/тренди\n"
+        "📰 Згадки бренду — новини/блоги\n\n"
         f"Статус реєстрації: {reg_text}\n"
         f"Ваш баланс: {bal} кредитів"
     )
@@ -242,19 +237,15 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reg_text = "✅ телефон додано" if _registered(uid) else "❌ немає телефону (використайте Реєстрація)"
     await update.message.reply_text(f"Баланс: {bal} кредитів\nРеєстрація: {reg_text}")
 
-# ====== Поповнення: вибір провайдера ======
+# ====== Поповнення ======
 async def topup_providers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = _providers_kb()
-    text = (
-        "💰 *Поповнення балансу*\n\n"
-        "Оберіть провайдера оплати."
-    )
+    text = "💰 *Поповнення балансу*\n\nОберіть провайдера оплати."
     if update.message:
         await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
     else:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
-# ====== Поповнення: вибір суми (для конкретного провайдера) ======
 async def open_amounts(update: Update, context: ContextTypes.DEFAULT_TYPE, provider: str):
     label = _provider_label(provider)
     msg = f"Оберіть суму поповнення ({label}):"
@@ -264,7 +255,7 @@ async def open_amounts(update: Update, context: ContextTypes.DEFAULT_TYPE, provi
     else:
         await update.callback_query.edit_message_text(msg, reply_markup=kb)
 
-# ====== Backlinks ======
+# ====== Backlinks (існуюче) ======
 async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = update.message.text.split()[1:]
     if not args:
@@ -287,7 +278,33 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-# ====== CALLBACKS (topup & backlinks) ======
+# ====== Саб-меню інструментів (кнопки лише) ======
+def _tool_menu_kb(tool_key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📘 Що це?", callback_data=f"tool_info|{tool_key}")],
+        [InlineKeyboardButton("▶️ Запустити (скоро)", callback_data=f"tool_soon|{tool_key}")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="go_main")]
+    ])
+
+_TOOL_INFO = {
+    "serp": "🔎 *SERP Топ-10*\nОтримайте перші 10 результатів Google із тайтлами, URL та SERP-фічами по вибраній країні/мові.",
+    "keywords": "🧠 *Ключові слова*\nІдеї ключових за seed-запитом: синоніми/related, пошуковий обсяг і CPC.",
+    "gap": "🧩 *Keyword Gap*\nПорівняння вашого домену з конкурентами: перетин/відсутні ключові слова.",
+    "backlinks_menu": "🔗 *Backlinks — огляд*\nШвидка зведенка: кількість беклінків, реф. домени, топ-анкори, нові/втрачені.",
+    "onpage": "🛠️ *On-Page аудит*\nШвидка перевірка URL: статус, мета-теги, H1/H2, канонікал, базові помилки.",
+    "domain": "📈 *Огляд домену*\nБазові метрики, трафік/тренди, за потреби — технологічний стек.",
+    "mentions": "📰 *Згадки бренду*\nПошук згадок у новинах/блогах із уривками та джерелами.",
+}
+
+async def _open_tool_menu(update: Update, tool_key: str):
+    kb = _tool_menu_kb(tool_key)
+    text = _TOOL_INFO.get(tool_key, "Інструмент")
+    if update.message:
+        await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
+    else:
+        await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+
+# ====== CALLBACKS (topup / backlinks / tools) ======
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -304,6 +321,23 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cmd = parts[0]
 
+    # --- Навігація по інструментах (кнопки) ---
+    if cmd == "tool_info":
+        tool = parts[1] if len(parts) > 1 else ""
+        text = _TOOL_INFO.get(tool, "Інструмент")
+        return await query.edit_message_text(text + "\n\n🚧 Функціонал буде доданий пізніше.", reply_markup=_tool_menu_kb(tool), parse_mode="Markdown")
+
+    if cmd == "tool_soon":
+        tool = parts[1] if len(parts) > 1 else ""
+        return await query.edit_message_text("🚧 У розробці. Скоро додамо запуск із кнопок.", reply_markup=_tool_menu_kb(tool))
+
+    if cmd == "go_main":
+        try:
+            await query.edit_message_text("Головне меню відкрито.")
+        except Exception:
+            pass
+        return await context.bot.send_message(chat_id=uid, text="Оберіть розділ:", reply_markup=main_menu_keyboard(_registered(uid)))
+
     # --- Екран вибору провайдера / повернення назад ---
     if cmd == "topup_providers":
         return await topup_providers(update, context)
@@ -313,16 +347,10 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         provider = (parts[1] if len(parts) > 1 else "liqpay").lower()
         return await open_amounts(update, context, provider)
 
-    # --- Ще не підключені провайдери ---
-    if cmd == "provider_soon":
-        label = _provider_label(parts[1] if len(parts) > 1 else "")
-        return await query.answer(f"{label} ще не підключено", show_alert=False)
-
     # --- Поповнення (створення інвойсу) ---
     if cmd == "topup":
         provider = (parts[1] if len(parts) > 1 else "liqpay").lower()
         amount_raw = parts[2] if len(parts) > 2 else ""
-        # дозволяємо «брудні» значення:  "100₴", "100.0", "100 грн"
         amount_clean = re.sub(r"[^\d.]", "", str(amount_raw))
         try:
             amount_uah = int(float(amount_clean))
@@ -334,7 +362,6 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 return
 
-        # стукаємось у наш бекенд
         try:
             async with AsyncClient(timeout=20) as c:
                 r = await c.post(
@@ -371,14 +398,12 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         label = _provider_label(provider)
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"💳 Оплатити ({label})", url=pay_url)]])
-        # окремим повідомленням із кнопкою
         await context.bot.send_message(
             chat_id=uid,
             text=(f"Рахунок створено на {amount_uah}₴ ({label}).\n"
                   f"Натисніть кнопку нижче або відкрийте лінк:\n{pay_url}"),
             reply_markup=kb
         )
-        # і прибираємо старе меню/пояснюємо
         try:
             await query.edit_message_text("Рахунок створено, дивись повідомлення з кнопкою нижче ⬇️")
         except Exception:
@@ -435,28 +460,44 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"Помилка: {e}")
         return
 
-    # --- Все інше (застарілі або невідомі кнопки) ---
+    # --- Все інше ---
     try:
-        return await query.edit_message_text("Кнопка застаріла або формат невірний. Відкрийте меню ще раз: /topup")
+        return await query.edit_message_text("Кнопка застаріла або формат невірний. Відкрийте меню ще раз: /start")
     except Exception:
         return
 
-
-# ====== Обробка меню ======
+# ====== Обробка меню-текстів ======
 async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
 
     if text == "🔗 Backlinks":
         return await update.message.reply_text("Введіть команду у форматі: /backlinks yourdomain.com")
+
     if text == "💳 Поповнити":
         return await topup_providers(update, context)
+
     if text == "📊 Баланс":
         return await balance(update, context)
+
     if text == "📱 Реєстрація":
         if _registered(uid):
             return await update.message.reply_text("Ви вже зареєстровані ✅", reply_markup=main_menu_keyboard(True))
         return await register_cmd_or_menu(update, context)
+
+    # Нові розділи — показуємо лише кнопки (без запусків)
+    if text == "🔎 SERP Топ-10":
+        return await _open_tool_menu(update, "serp")
+    if text == "🧠 Ключові слова":
+        return await _open_tool_menu(update, "keywords")
+    if text == "🧩 Keyword Gap":
+        return await _open_tool_menu(update, "gap")
+    if text == "🛠️ On-Page аудит":
+        return await _open_tool_menu(update, "onpage")
+    if text == "📈 Огляд домену":
+        return await _open_tool_menu(update, "domain")
+    if text == "📰 Згадки бренду":
+        return await _open_tool_menu(update, "mentions")
 
 # ====== АДМІНКА ======
 def _db() -> sqlite3.Connection:
@@ -523,7 +564,7 @@ def main():
     # Команди
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance))
-    app.add_handler(CommandHandler("topup", topup_providers))  # /topup відкриває вибір провайдера
+    app.add_handler(CommandHandler("topup", topup_providers))
     app.add_handler(CommandHandler("backlinks", backlinks))
 
     # Реєстрація — розмова
@@ -542,7 +583,7 @@ def main():
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(on_admin_cb, pattern=r"^admin\|"))
 
-    # Callback’и (providers / amounts / topup / backlinks)
+    # Callback’и (providers / amounts / topup / backlinks / tools)
     app.add_handler(CallbackQueryHandler(on_choice))
 
     # Меню-тексти
