@@ -138,43 +138,44 @@ def services_menu_keyboard() -> ReplyKeyboardMarkup:
 
 async def _set_menu_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE, kb: ReplyKeyboardMarkup):
     """
-    Перемикає нижню клавіатуру з мінімальним шумом.
-    Спочатку пробує редагувати попереднє бот-повідомлення.
-    Якщо нема — шле NBSP як майже невидимий плейсхолдер.
+    Перемикає нижнє (reply) меню.
+    1) Прагнемо редагувати попереднє бот-повідомлення (без шуму).
+    2) Якщо нема що редагувати — шлемо короткий плейсхолдер "·" з клавіатурою
+       і ВІДРАЗУ його видаляємо (клавіатура залишиться).
     """
     chat_id = update.effective_chat.id
     last_id = context.chat_data.get("menu_msg_id")
 
-    # 1) Спроба редагувати останнє бот-повідомлення з меню
+    # 1) редагуємо, якщо є що
     if last_id:
         try:
             await context.bot.edit_message_reply_markup(
-                chat_id=chat_id,
-                message_id=last_id,
-                reply_markup=kb
+                chat_id=chat_id, message_id=last_id, reply_markup=kb
             )
             return
-        except Exception:
+        except TelegramError:
+            # впадемо у варіант з плейсхолдером
             pass
 
-    # 2) Плейсхолдер: NBSP (видимості нульова), якщо Телеграм все ж лається — крапка
-    try:
-        msg = await context.bot.send_message(
-            chat_id,
-            "\u00A0",  # NBSP — не порожній символ
-            reply_markup=kb,
-            disable_notification=True,
-            allow_sending_without_reply=True,
-        )
-    except Exception:
-        msg = await context.bot.send_message(
-            chat_id,
-            ".",      # запасний варіант, якщо NBSP не пройде
-            reply_markup=kb,
-            disable_notification=True,
-            allow_sending_without_reply=True,
-        )
+    # 2) плейсхолдер з клавою -> видаляємо через мить
+    msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text="·",                     # дуже непомітний символ
+        reply_markup=kb,
+        disable_notification=True,
+        allow_sending_without_reply=True,
+    )
     context.chat_data["menu_msg_id"] = msg.message_id
+
+    # спробуємо акуратно прибрати "·", клавіатура залишиться активною
+    try:
+        await asyncio.sleep(0.25)
+        await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
+        # НЕ чистимо menu_msg_id: він стане непридатним для редагування — це ок.
+        # Наступний раз знову підемо плейсхолдером без шуму.
+    except TelegramError:
+        # якщо не вдалося — нічого страшного, хай залишиться точка
+        pass
 
 def _extract_first_items(resp: dict) -> List[dict]:
     tasks = resp.get("tasks") or []
