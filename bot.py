@@ -139,33 +139,30 @@ def services_menu_keyboard() -> ReplyKeyboardMarkup:
 
 async def _set_menu_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE, kb: ReplyKeyboardMarkup):
     """
-    Перемикає нижнє (reply) меню:
-    1) надсилаємо непомітне повідомлення з потрібною ReplyKeyboardMarkup
-    2) через мить видаляємо це повідомлення — клавіатура залишиться активною
+    Виставляємо Reply-клавіатуру без блимаючого зникання:
+    1) надсилаємо НОВИЙ «тримач» з клавою (невидимий символ у тексті)
+    2) акуратно видаляємо ЛИШЕ ПОПЕРЕДНІЙ тримач (якщо був)
     """
     chat_id = update.effective_chat.id
+    old_id = context.chat_data.get("menu_holder_id")
 
-    # Надсилаємо плейсхолдер з новою reply-клавою
+    # 1) новий тримач
     msg = await context.bot.send_message(
         chat_id=chat_id,
-        text="·",
+        text="\u2063",  # невидимий символ (zero-width)
         reply_markup=kb,
         disable_notification=True,
         allow_sending_without_reply=True,
     )
+    context.chat_data["menu_holder_id"] = msg.message_id
 
-    # Акуратно видаляємо плейсхолдер (клава залишиться)
-    try:
-        await asyncio.sleep(0.25)
-        await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
-    except TelegramError:
-        pass
-    # --- Повернення з інлайн-меню сервісів ---
-    if cmd == "services_back":
-        # Просто підкажемо і повернемо нижнє головне меню
-        await query.edit_message_text("Повернувся до головного меню. Користуйся нижніми кнопками ⬇️")
-        await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(uid)))
-        return
+    # 2) спробуємо прибрати СТАРИЙ тримач (не новий!)
+    if old_id and old_id != msg.message_id:
+        try:
+            await asyncio.sleep(0.15)
+            await context.bot.delete_message(chat_id=chat_id, message_id=old_id)
+        except TelegramError:
+            pass
 
 def _extract_first_items(resp: dict) -> List[dict]:
     tasks = resp.get("tasks") or []
