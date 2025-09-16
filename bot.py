@@ -138,17 +138,42 @@ def services_menu_keyboard() -> ReplyKeyboardMarkup:
 
 async def _set_menu_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE, kb: ReplyKeyboardMarkup):
     """
-    Перемикає нижню клавіатуру з мінімальним шумом. Якщо нема, шле непомітний плейсхолдер.
+    Перемикає нижню клавіатуру з мінімальним шумом.
+    Спочатку пробує редагувати попереднє бот-повідомлення.
+    Якщо нема — шле NBSP як майже невидимий плейсхолдер.
     """
     chat_id = update.effective_chat.id
     last_id = context.chat_data.get("menu_msg_id")
-    try:
-        if last_id:
-            await context.bot.edit_message_reply_markup(chat_id=chat_id, message_id=last_id, reply_markup=kb)
+
+    # 1) Спроба редагувати останнє бот-повідомлення з меню
+    if last_id:
+        try:
+            await context.bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=last_id,
+                reply_markup=kb
+            )
             return
+        except Exception:
+            pass
+
+    # 2) Плейсхолдер: NBSP (видимості нульова), якщо Телеграм все ж лається — крапка
+    try:
+        msg = await context.bot.send_message(
+            chat_id,
+            "\u00A0",  # NBSP — не порожній символ
+            reply_markup=kb,
+            disable_notification=True,
+            allow_sending_without_reply=True,
+        )
     except Exception:
-        pass
-    msg = await context.bot.send_message(chat_id, "\u200b", reply_markup=kb)  # zero-width space
+        msg = await context.bot.send_message(
+            chat_id,
+            ".",      # запасний варіант, якщо NBSP не пройде
+            reply_markup=kb,
+            disable_notification=True,
+            allow_sending_without_reply=True,
+        )
     context.chat_data["menu_msg_id"] = msg.message_id
 
 def _extract_first_items(resp: dict) -> List[dict]:
