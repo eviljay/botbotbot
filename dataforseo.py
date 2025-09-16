@@ -35,92 +35,59 @@ class DataForSEO:
             r.raise_for_status()
             return r.json()
 
-    # ======================================================
-    #                     BACKLINKS API
-    # ======================================================
-
-    async def backlinks_live(
-        self,
-        target: str,
-        limit: int = 20,
-        order_by: str = "first_seen,desc",
-        filters: Optional[List[Any]] = None,
-        **extra: Any,
-    ) -> Dict[str, Any]:
-        """
-        Список беклінків (live).
-        """
-        task: Dict[str, Any] = {"target": target, "limit": limit, "order_by": [order_by]}
+     # ===== Backlinks =====
+    async def backlinks_live(self, target: str, limit: int = 20, order_by: str = "first_seen,desc", filters=None):
+        task = {"target": target, "limit": limit, "order_by": [order_by]}
         if filters:
             task["filters"] = filters
-        task.update(extra)
         return await self._post_array("/v3/backlinks/backlinks/live", [task])
 
-    async def refdomains_live(
-        self,
-        target: str,
-        limit: int = 50,
-        order_by: str = "backlinks,desc",
-        **extra: Any,
-    ) -> Dict[str, Any]:
-        """
-        Живий список реф.доменів.
-        """
+    async def backlinks_live_page(self, target: str, limit: int = 1000, offset: int = 0,
+                                  order_by: str = "first_seen,desc", filters=None):
+        """Повертає одну сторінку беклінків + total_count."""
+        task = {"target": target, "limit": limit, "offset": offset, "order_by": [order_by]}
+        if filters:
+            task["filters"] = filters
+        resp = await self._post_array("/v3/backlinks/backlinks/live", [task])
+        tasks = resp.get("tasks") or []
+        t = tasks[0] if tasks else {}
+        result = (t.get("result") or [{}])[0]
+        items = result.get("items") or []
+        total_count = result.get("total_count") or len(items)
+        return items, int(total_count)
+
+    async def backlinks_all(self, target: str, order_by: str = "first_seen,desc", filters=None,
+                            page_size: int = 1000, max_total: int = 200000):
+        """Йде по сторінках поки не збере всі (або до max_total)."""
+        all_items = []
+        offset = 0
+        total = None
+        while True:
+            items, total_count = await self.backlinks_live_page(
+                target, limit=page_size, offset=offset, order_by=order_by, filters=filters
+            )
+            if total is None:
+                total = total_count
+            if not items:
+                break
+            all_items.extend(items)
+            offset += len(items)
+            if offset >= total_count or offset >= max_total:
+                break
+        # total повертаємо як мін(total, max_total), щоб не обіцяти більше, ніж віддали
+        return all_items, min(total or len(all_items), max_total)
+
+    async def refdomains_live(self, target: str, limit: int = 50, order_by: str = "backlinks,desc"):
         task = {"target": target, "limit": limit, "order_by": [order_by]}
-        task.update(extra)
         return await self._post_array("/v3/backlinks/referring_domains/live", [task])
 
-    async def anchors_live(
-        self,
-        target: str,
-        limit: int = 50,
-        order_by: str = "backlinks,desc",
-        **extra: Any,
-    ) -> Dict[str, Any]:
-        """
-        Живий список анкорів.
-        """
+    async def anchors_live(self, target: str, limit: int = 50, order_by: str = "backlinks,desc"):
         task = {"target": target, "limit": limit, "order_by": [order_by]}
-        task.update(extra)
         return await self._post_array("/v3/backlinks/anchors/live", [task])
 
-    async def backlinks_summary(self, target: str, **extra: Any) -> Dict[str, Any]:
-        """
-        Короткий огляд беклінків домену (агрегати).
-        """
+    async def backlinks_summary(self, target: str):
         task = {"target": target}
-        task.update(extra)
         return await self._post_array("/v3/backlinks/summary/live", [task])
-
-    async def refdomains_summary(self, target: str, **extra: Any) -> Dict[str, Any]:
-        """
-        Короткий огляд реф.доменів (агрегати).
-        """
-        task = {"target": target}
-        task.update(extra)
-        return await self._post_array("/v3/backlinks/referring_domains/summary/live", [task])
-
-    async def backlinks_overview_bundle(
-        self,
-        target: str,
-        anchors_limit: int = 10,
-        **extra: Any,
-    ) -> Dict[str, Any]:
-        """
-        Комплексний огляд беклінків:
-        - summary
-        - refdomains summary
-        - топ анкорів (anchors_live)
-        Повертає один словник з трьома ключами.
-        """
-        s = await self.backlinks_summary(target, **extra)
-        rs = await self.refdomains_summary(target, **extra)
-        a = await self.anchors_live(target, limit=anchors_limit, **extra)
-        return {
-            "summary": s,
-            "refdomains_summary": rs,
-            "top_anchors": a,
-        }
 
     # ======================================================
     #                       SERP API
