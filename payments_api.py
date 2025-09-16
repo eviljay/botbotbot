@@ -187,23 +187,42 @@ def _wfp_make_create_signature(merchantAccount: str, merchantDomainName: str,
     return msg, sig
 
 def _wfp_verify_callback_signature(payload: dict) -> bool:
+    def _s(key: str) -> str:
+        v = payload.get(key, "")
+        return str(v if v is not None else "")
+
     parts = [
-        payload.get("merchantAccount", ""),
-        payload.get("orderReference", ""),
-        str(payload.get("amount", "")),
-        payload.get("currency", ""),
-        payload.get("authCode", ""),
-        payload.get("cardPan", ""),
-        payload.get("transactionStatus", ""),
-        payload.get("reasonCode", ""),
+        _s("merchantAccount"),
+        _s("orderReference"),
+        _s("amount"),
+        _s("currency"),
+        _s("authCode"),
+        _s("cardPan"),
+        _s("transactionStatus"),
+        _s("reasonCode"),
     ]
     msg = ";".join(parts)
     calc = _wfp_hmac_md5(msg)
-    got = (payload.get("merchantSignature") or "").lower()
-    if got != calc.lower():
-        log.warning("WFP callback: signature mismatch: got=%s calc=%s msg='%s'", got, calc, msg)
-        return False
-    return True
+    got  = (_s("merchantSignature")).lower()
+
+    if got == calc.lower():
+        return True
+
+    # запасний варіант: деякі інтеграції підписують amount у «зрізаному» вигляді
+    try:
+        amt = float(payload.get("amount", 0))
+        msg2_parts = parts[:]
+        msg2_parts[2] = _wfp_amount_str(amt)  # 100 -> "100", 100.50 -> "100.5"
+        msg2 = ";".join(msg2_parts)
+        calc2 = _wfp_hmac_md5(msg2)
+        if got == calc2.lower():
+            log.warning("WFP callback: matched with normalized amount. msg='%s'", msg2)
+            return True
+    except Exception:
+        pass
+
+    log.warning("WFP callback: signature mismatch: got=%s calc=%s msg='%s'", got, calc, msg)
+    return False
 
 def _wfp_response_signature(orderReference: str, status: str, time_int: int) -> str:
     msg = ";".join([orderReference, status, str(time_int)])
