@@ -271,35 +271,9 @@ async def services_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
-    # Toggle bottom menus
-    if text in ("🧰 Сервіси", "Сервіси"):
-        context.chat_data["in_services"] = True
-        await _set_menu_keyboard(update, context, services_menu_keyboard())
-        return
 
-    if text == "⬅️ Назад":
-        context.chat_data["in_services"] = False
-        await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(update.effective_user.id)))
-        return
-
-    # Service shortcuts (reply keyboard)
-    if text in ("🔍 SERP", "🧠 Keyword Ideas", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
-        # Map button to tool key and prompt format
-        mapping = {
-            "🔍 SERP": ("serp", "SERP: `iphone 13 | country=Ukraine | lang=Ukrainian | depth=10`"),
-            "🧠 Keyword Ideas": ("keywords", "Keywords: `seo tools | country=Ukraine | lang=Ukrainian | limit=20`"),
-            "⚔️ Gap": ("gap", "Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50`"),
-            "🔗 Backlinks": ("backlinks_ov", "Backlinks: `mydomain.com`"),
-            "🛠️ Аудит": ("audit", "Audit: `https://example.com/page`"),
-        }
-        tool, hint = mapping[text]
-        context.user_data["await_tool"] = tool
-        await update.message.reply_text(
-    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
-    parse_mode="Markdown",
-    reply_markup=services_menu_keyboard()
-)
-
+    
+    
     ensure_user(uid)
     bal = get_balance(uid)
     reg = _registered(uid)
@@ -340,37 +314,7 @@ def _normalize_phone(p: str) -> str:
     return ("+" + digits) if digits and not p.strip().startswith("+") else (p if p.startswith("+") else "+" + digits)
 
 async def register_cmd_or_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-
-    # Toggle bottom menus
-    if text in ("🧰 Сервіси", "Сервіси"):
-        context.chat_data["in_services"] = True
-        await _set_menu_keyboard(update, context, services_menu_keyboard())
-        return
-
-    if text == "⬅️ Назад":
-        context.chat_data["in_services"] = False
-        await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(update.effective_user.id)))
-        return
-
-    # Service shortcuts (reply keyboard)
-    if text in ("🔍 SERP", "🧠 Keyword Ideas", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
-        # Map button to tool key and prompt format
-        mapping = {
-            "🔍 SERP": ("serp", "SERP: `iphone 13 | country=Ukraine | lang=Ukrainian | depth=10`"),
-            "🧠 Keyword Ideas": ("keywords", "Keywords: `seo tools | country=Ukraine | lang=Ukrainian | limit=20`"),
-            "⚔️ Gap": ("gap", "Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50`"),
-            "🔗 Backlinks": ("backlinks_ov", "Backlinks: `mydomain.com`"),
-            "🛠️ Аудит": ("audit", "Audit: `https://example.com/page`"),
-        }
-        tool, hint = mapping[text]
-        context.user_data["await_tool"] = tool
-        await update.message.reply_text(
-    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
-    parse_mode="Markdown",
-    reply_markup=services_menu_keyboard()
-)
-
+    
     ensure_user(uid)
 
     if _registered(uid):
@@ -384,95 +328,7 @@ async def register_cmd_or_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     return WAIT_PHONE
 
 async def on_contact_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-
-    # Toggle bottom menus
-    if text in ("🧰 Сервіси", "Сервіси"):
-        context.chat_data["in_services"] = True
-        await _set_menu_keyboard(update, context, services_menu_keyboard())
-        return
-
-    if text == "⬅️ Назад":
-        context.chat_data["in_services"] = False
-        await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(update.effective_user.id)))
-        return
-
-    # Service shortcuts (reply keyboard)
-    if text in ("🔍 SERP", "🧠 Keyword Ideas", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
-        # Map button to tool key and prompt format
-        mapping = {
-            "🔍 SERP": ("serp", "SERP: `iphone 13 | country=Ukraine | lang=Ukrainian | depth=10`"),
-            "🧠 Keyword Ideas": ("keywords", "Keywords: `seo tools | country=Ukraine | lang=Ukrainian | limit=20`"),
-            "⚔️ Gap": ("gap", "Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50`"),
-            "🔗 Backlinks": ("backlinks_ov", "Backlinks: `mydomain.com`"),
-            "🛠️ Аудит": ("audit", "Audit: `https://example.com/page`"),
-        }
-        tool, hint = mapping[text]
-        context.user_data["await_tool"] = tool
-        await update.message.reply_text(
-    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
-    parse_mode="Markdown",
-    reply_markup=services_menu_keyboard()
-)
-
-    contact = update.message.contact
-    if not contact or (contact.user_id and contact.user_id != uid):
-        kb = [[KeyboardButton("📱 Поділитись номером", request_contact=True)]]
-        await update.message.reply_text(
-            "Будь ласка, поділіться **власним** контактом.",
-            reply_markup=ReplyKeyboardMarkup(kb, one_time_keyboard=True, resize_keyboard=True),
-        )
-        return WAIT_PHONE
-
-    phone_norm = _normalize_phone(contact.phone_number or "")
-    is_new, credited = register_or_update_phone(uid, phone_norm, initial_bonus=INITIAL_BONUS)
-    bal = get_balance(uid)
-
-    if is_new and credited > 0:
-        msg = f"✅ Дякуємо за реєстрацію!\nНараховано бонус: +{credited} кредитів.\nВаш баланс: {bal}"
-    else:
-        msg = f"✅ Телефон збережено.\nВаш баланс: {bal}"
-
-    await update.message.reply_text(msg, reply_markup=main_menu_keyboard(True))
-    return ConversationHandler.END
-
-async def cancel_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Скасовано.", reply_markup=main_menu_keyboard(_registered(update.effective_user.id)))
-    return ConversationHandler.END
-
-# ====== Баланс ======
-async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-
-    # Toggle bottom menus
-    if text in ("🧰 Сервіси", "Сервіси"):
-        context.chat_data["in_services"] = True
-        await _set_menu_keyboard(update, context, services_menu_keyboard())
-        return
-
-    if text == "⬅️ Назад":
-        context.chat_data["in_services"] = False
-        await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(update.effective_user.id)))
-        return
-
-    # Service shortcuts (reply keyboard)
-    if text in ("🔍 SERP", "🧠 Keyword Ideas", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
-        # Map button to tool key and prompt format
-        mapping = {
-            "🔍 SERP": ("serp", "SERP: `iphone 13 | country=Ukraine | lang=Ukrainian | depth=10`"),
-            "🧠 Keyword Ideas": ("keywords", "Keywords: `seo tools | country=Ukraine | lang=Ukrainian | limit=20`"),
-            "⚔️ Gap": ("gap", "Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50`"),
-            "🔗 Backlinks": ("backlinks_ov", "Backlinks: `mydomain.com`"),
-            "🛠️ Аудит": ("audit", "Audit: `https://example.com/page`"),
-        }
-        tool, hint = mapping[text]
-        context.user_data["await_tool"] = tool
-        await update.message.reply_text(
-    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
-    parse_mode="Markdown",
-    reply_markup=services_menu_keyboard()
-)
-
+    
     ensure_user(uid)
     bal = get_balance(uid)
     reg_text = "✅ телефон додано" if _registered(uid) else "❌ немає телефону (використайте Реєстрація)"
@@ -525,16 +381,6 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     uid = update.effective_user.id
 
-    # Toggle bottom menus
-    if text in ("🧰 Сервіси", "Сервіси"):
-        context.chat_data["in_services"] = True
-        await _set_menu_keyboard(update, context, services_menu_keyboard())
-        return
-
-    if text == "⬅️ Назад":
-        context.chat_data["in_services"] = False
-        await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(update.effective_user.id)))
-        return
 
     # Service shortcuts (reply keyboard)
     if text in ("🔍 SERP", "🧠 Keyword Ideas", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
@@ -548,12 +394,8 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-        await update.message.reply_text(
-    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
-    parse_mode="Markdown",
-    reply_markup=services_menu_keyboard()
-)
-
+        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
+        return
     raw = (query.data or "").strip()
     log.info("CB <- %s", raw)
 
@@ -795,12 +637,8 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-await update.message.reply_text(
-    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
-    parse_mode="Markdown",
-    reply_markup=services_menu_keyboard()
-)
-
+        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
+        return
 
     # Wizard для сервісів (після кліку на кнопку)
     aw = context.user_data.get("await_tool")
@@ -1108,16 +946,6 @@ def _admin_kb(page: int) -> InlineKeyboardMarkup:
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
-    # Toggle bottom menus
-    if text in ("🧰 Сервіси", "Сервіси"):
-        context.chat_data["in_services"] = True
-        await _set_menu_keyboard(update, context, services_menu_keyboard())
-        return
-
-    if text == "⬅️ Назад":
-        context.chat_data["in_services"] = False
-        await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(update.effective_user.id)))
-        return
 
     # Service shortcuts (reply keyboard)
     if text in ("🔍 SERP", "🧠 Keyword Ideas", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
@@ -1131,15 +959,8 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-       await update.message.reply_text(
-    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
-    parse_mode="Markdown",
-    reply_markup=services_menu_keyboard()
-)
-
-
-
-       
+        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
+        return
     if not _admin_check(uid):
         return await update.message.reply_text("⛔️ Доступ заборонено.")
     text = _render_users_page(1)
@@ -1150,16 +971,6 @@ async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     uid = update.effective_user.id
 
-    # Toggle bottom menus
-    if text in ("🧰 Сервіси", "Сервіси"):
-        context.chat_data["in_services"] = True
-        await _set_menu_keyboard(update, context, services_menu_keyboard())
-        return
-
-    if text == "⬅️ Назад":
-        context.chat_data["in_services"] = False
-        await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(update.effective_user.id)))
-        return
 
     # Service shortcuts (reply keyboard)
     if text in ("🔍 SERP", "🧠 Keyword Ideas", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
@@ -1173,12 +984,8 @@ async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-        await update.message.reply_text(
-    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
-    parse_mode="Markdown",
-    reply_markup=services_menu_keyboard()
-)
-
+        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
+        return
     if not _admin_check(uid):
         return await query.edit_message_text("⛔️ Доступ заборонено.")
     parts = (query.data or "").split("|")
