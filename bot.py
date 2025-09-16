@@ -374,6 +374,13 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode="Markdown",
     )
+# ====== Баланс ======
+async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    ensure_user(uid)
+    bal = get_balance(uid)
+    reg_text = "✅ телефон додано" if _registered(uid) else "❌ немає телефону (використайте Реєстрація)"
+    await update.message.reply_text(f"Баланс: {bal} кредитів\nРеєстрація: {reg_text}")
 
 # ====== CALLBACKS (services entry, topup, backlinks) ======
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
