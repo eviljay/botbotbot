@@ -154,7 +154,7 @@ class DataForSEO:
     ):
         task = {
             "target": target,
-            "competitors": competitors,
+            "targets": competitors,
             "location_name": location_name,
             "language_name": language_name,
             "se_type": "google",
