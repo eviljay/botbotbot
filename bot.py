@@ -260,7 +260,7 @@ def _providers_kb() -> InlineKeyboardMarkup:
 # ====== Сервіси (інлайн-меню) ======
 def _services_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔍 Топ-10 Google (SERP)", callback_data="svc|serp")],
+        [InlineKeyboardButton("🔍 Топ-10 Google (SERP)", callback_data="svc|serp")], 
         [InlineKeyboardButton("🧠 Ідеї ключових + обсяг/CPC", callback_data="svc|keywords")],
         [InlineKeyboardButton("⚔️ Keyword Gap", callback_data="svc|gap")],
         [InlineKeyboardButton("🔗 Backlinks огляд", callback_data="svc|backlinks_ov")],
