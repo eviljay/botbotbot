@@ -294,11 +294,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.
+        await update.message.reply_text(
+    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
+    parse_mode="Markdown",
+    reply_markup=services_menu_keyboard()
+)
 
-Приклад:
-{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
-        return
     ensure_user(uid)
     bal = get_balance(uid)
     reg = _registered(uid)
@@ -364,11 +365,12 @@ async def register_cmd_or_menu(update: Update, context: ContextTypes.DEFAULT_TYP
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.
+        await update.message.reply_text(
+    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
+    parse_mode="Markdown",
+    reply_markup=services_menu_keyboard()
+)
 
-Приклад:
-{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
-        return
     ensure_user(uid)
 
     if _registered(uid):
@@ -407,11 +409,12 @@ async def on_contact_register(update: Update, context: ContextTypes.DEFAULT_TYPE
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.
+        await update.message.reply_text(
+    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
+    parse_mode="Markdown",
+    reply_markup=services_menu_keyboard()
+)
 
-Приклад:
-{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
-        return
     contact = update.message.contact
     if not contact or (contact.user_id and contact.user_id != uid):
         kb = [[KeyboardButton("📱 Поділитись номером", request_contact=True)]]
@@ -464,11 +467,12 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.
+        await update.message.reply_text(
+    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
+    parse_mode="Markdown",
+    reply_markup=services_menu_keyboard()
+)
 
-Приклад:
-{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
-        return
     ensure_user(uid)
     bal = get_balance(uid)
     reg_text = "✅ телефон додано" if _registered(uid) else "❌ немає телефону (використайте Реєстрація)"
@@ -544,11 +548,12 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.
+        await update.message.reply_text(
+    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
+    parse_mode="Markdown",
+    reply_markup=services_menu_keyboard()
+)
 
-Приклад:
-{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
-        return
     raw = (query.data or "").strip()
     log.info("CB <- %s", raw)
 
@@ -1126,11 +1131,15 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.
+       await update.message.reply_text(
+    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
+    parse_mode="Markdown",
+    reply_markup=services_menu_keyboard()
+)
 
-Приклад:
-{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
-        return
+
+
+       
     if not _admin_check(uid):
         return await update.message.reply_text("⛔️ Доступ заборонено.")
     text = _render_users_page(1)
@@ -1164,11 +1173,12 @@ async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.
+        await update.message.reply_text(
+    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
+    parse_mode="Markdown",
+    reply_markup=services_menu_keyboard()
+)
 
-Приклад:
-{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
-        return
     if not _admin_check(uid):
         return await query.edit_message_text("⛔️ Доступ заборонено.")
     parts = (query.data or "").split("|")
