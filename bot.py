@@ -391,8 +391,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "audit": "🛠️ Аудит: введіть URL: `https://example.com/page`",
         }
         text = prompts.get(tool, "Надішліть параметри в одному рядку.")
-            return await query.edit_message_text(text, disable_web_page_preview=True)
-
+        return await query.edit_message_text(text, disable_web_page_preview=True)
 
     # --- Екран вибору провайдера / повернення ---
     if cmd == "topup_providers":
