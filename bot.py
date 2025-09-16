@@ -6,7 +6,7 @@ import math
 import logging
 import sqlite3
 import zipfile
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from httpx import AsyncClient, ConnectError, HTTPError
@@ -85,18 +85,18 @@ INITIAL_BONUS    = _parse_int_env("INITIAL_BONUS", 10)
 TOPUP_OPTIONS    = _parse_int_list_env("TOPUP_OPTIONS", "100,250,500")
 
 # ціни інструментів (грн → кредити)
-SERP_CHARGE_UAH         = _parse_float_env("SERP_CHARGE_UAH", 5.0)
-KW_IDEAS_CHARGE_UAH     = _parse_float_env("KW_IDEAS_CHARGE_UAH", 5.0)
-GAP_CHARGE_UAH          = _parse_float_env("GAP_CHARGE_UAH", 10.0)
-BACKLINKS_CHARGE_UAH    = _parse_float_env("BACKLINKS_CHARGE_UAH", 5.0)  # для /backlinks кнопок
-BACKLINKS_FULL_EXPORT_CHARGE_UAH = _parse_float_env("BACKLINKS_FULL_EXPORT_CHARGE_UAH", BACKLINKS_CHARGE_UAH)
-AUDIT_CHARGE_UAH        = _parse_float_env("AUDIT_CHARGE_UAH", 5.0)
+SERP_CHARGE_UAH                   = _parse_float_env("SERP_CHARGE_UAH", 5.0)
+KW_IDEAS_CHARGE_UAH               = _parse_float_env("KW_IDEAS_CHARGE_UAH", 5.0)
+GAP_CHARGE_UAH                    = _parse_float_env("GAP_CHARGE_UAH", 10.0)
+BACKLINKS_CHARGE_UAH              = _parse_float_env("BACKLINKS_CHARGE_UAH", 5.0)
+BACKLINKS_FULL_EXPORT_CHARGE_UAH  = _parse_float_env("BACKLINKS_FULL_EXPORT_CHARGE_UAH", BACKLINKS_CHARGE_UAH)
+AUDIT_CHARGE_UAH                  = _parse_float_env("AUDIT_CHARGE_UAH", 5.0)
 
 # налаштування експорту
-CSV_MAX                = _parse_int_env("CSV_MAX", 1000)              # старі ліміти попереднього перегляду
-BACKLINKS_PAGE_SIZE    = _parse_int_env("BACKLINKS_PAGE_SIZE", 1000)  # крок пагінації
-MAX_BACKLINKS_EXPORT   = _parse_int_env("MAX_BACKLINKS_EXPORT", 200000)  # верхній ліміт, щоб не впасти
-BACKLINKS_PART_ROWS    = _parse_int_env("BACKLINKS_CSV_PART_ROWS", 50000) # розмір однієї CSV-частини в ZIP
+CSV_MAX                 = _parse_int_env("CSV_MAX", 1000)
+BACKLINKS_PAGE_SIZE     = _parse_int_env("BACKLINKS_PAGE_SIZE", 1000)
+MAX_BACKLINKS_EXPORT    = _parse_int_env("MAX_BACKLINKS_EXPORT", 200000)
+BACKLINKS_PART_ROWS     = _parse_int_env("BACKLINKS_CSV_PART_ROWS", 50000)
 
 # для адмінки
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()}
@@ -135,6 +135,16 @@ def _extract_first_items(resp: dict) -> List[dict]:
     if not res:
         return []
     return res[0].get("items") or []
+
+def _extract_result(resp: dict) -> dict:
+    tasks = resp.get("tasks") or []
+    if not tasks:
+        return {}
+    t = tasks[0] or {}
+    if t.get("status_code") and t["status_code"] != 20000:
+        raise RuntimeError(t.get("status_message") or f"Task error: {t.get('status_code')}")
+    res = t.get("result") or []
+    return res[0] if res else {}
 
 def _uah_to_credits(amount_uah: float) -> int:
     return max(1, math.ceil(amount_uah / CREDIT_PRICE_UAH))
@@ -208,11 +218,11 @@ def _services_kb() -> InlineKeyboardMarkup:
 async def services_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "🧰 *Сервіси*\n\nОбери інструмент. "
-        "Після кліку бот попросить ввести дані в одному рядку з опціями через `|`.\n"
+        "Після кліку надішліть дані в одному рядку з опціями через `|`.\n\n"
         "Приклади:\n"
-        "• SERP: `iphone 13 | country=Ukraine | lang=Ukrainian`\n"
+        "• SERP: `iphone 13 | country=Ukraine | lang=Ukrainian | depth=10`\n"
         "• Ідеї ключових: `seo tools | country=Ukraine | lang=Ukrainian | limit=20`\n"
-        "• Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian`\n"
+        "• Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50`\n"
         "• Backlinks огляд: `mydomain.com`\n"
         "• Аудит: `https://example.com/page`"
     )
@@ -247,7 +257,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "Привіт! Я SEO-бот з балансом.\n\n"
         "Меню:\n"
-        "🧰 Сервіси — інструменти (SERP, Keywords, Gap, Backlinks, Audit)\n"
+        "🧰 Сервіси — SERP, Keywords, Gap, Backlinks, Audit\n"
         "💳 Поповнити — LiqPay або WayForPay\n"
         "📊 Баланс — ваші кредити\n"
         "📱 Реєстрація — додати телефон (новим — бонус)\n\n"
@@ -328,7 +338,7 @@ async def open_amounts(update: Update, context: ContextTypes.DEFAULT_TYPE, provi
     else:
         await update.callback_query.edit_message_text(msg, reply_markup=kb)
 
-# ====== Backlinks (команда з кнопками) ======
+# ====== Backlinks (команда з кнопками/експортом) ======
 async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = update.message.text.split()[1:]
     if not args:
@@ -351,7 +361,7 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-# ====== CALLBACKS (topup & backlinks & services entry) ======
+# ====== CALLBACKS (services entry, topup, backlinks) ======
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -373,9 +383,9 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tool = parts[1] if len(parts) > 1 else ""
         context.user_data["await_tool"] = tool
         prompts = {
-            "serp": "🔍 SERP: введіть запит. Опційно: `| country=Ukraine | lang=Ukrainian`",
+            "serp": "🔍 SERP: введіть запит. Опційно: `| country=Ukraine | lang=Ukrainian | depth=10`",
             "keywords": "🧠 Ідеї ключових: введіть seed. Опційно: `| country=Ukraine | lang=Ukrainian | limit=20`",
-            "gap": "⚔️ Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian`",
+            "gap": "⚔️ Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50`",
             "backlinks_ov": "🔗 Backlinks огляд: введіть домен: `mydomain.com`",
             "audit": "🛠️ Аудит: введіть URL: `https://example.com/page`",
         }
@@ -386,7 +396,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cmd == "topup_providers":
         return await topup_providers(update, context)
 
-    # --- Відкрити вибір сум для провайдера ---
+    # --- Вибір сум для провайдера ---
     if cmd == "open_amounts":
         provider = (parts[1] if len(parts) > 1 else "liqpay").lower()
         return await open_amounts(update, context, provider)
@@ -454,13 +464,12 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # --- Старі платні дії (backlinks list/CSV через команду) ---
+    # --- Старі платні дії (backlinks list/CSV через /backlinks) ---
     if cmd in ("show", "csv") and len(parts) == 3:
         if not dfs:
             return await query.edit_message_text("DataForSEO не сконфігуровано. Додайте логін/пароль у .env")
 
         _, domain, scope = parts
-        # вартість: для повного експорту дозволяємо окреме налаштування
         uah_cost = BACKLINKS_FULL_EXPORT_CHARGE_UAH if scope == "all" and cmd == "csv" else BACKLINKS_CHARGE_UAH
         need_credits = _uah_to_credits(uah_cost)
 
@@ -471,7 +480,6 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         try:
-            # --- ПРЕВ’Ю або невеликий CSV (10 або лімітований) ---
             if scope != "all":
                 limit = PREVIEW_COUNT if scope == "10" else CSV_MAX
                 data_resp = await dfs.backlinks_live(domain, limit=limit, order_by="first_seen,desc")
@@ -508,8 +516,8 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.edit_message_text("Готово ✅")
                 return
 
-            # --- ПОВНИЙ CSV (пагіновано, до MAX_BACKLINKS_EXPORT) ---
-            # збираємо всі (або до ліміту) і віддаємо одним CSV або ZIP з частинами
+            # повний експорт
+            from dataforseo import DataForSEO  # just to be safe in some linters
             items_all, total = await dfs.backlinks_all(
                 domain, order_by="first_seen,desc", page_size=BACKLINKS_PAGE_SIZE, max_total=MAX_BACKLINKS_EXPORT
             )
@@ -518,7 +526,6 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 bal_now = get_balance(uid)
                 return await query.edit_message_text(f"Нічого не знайшов 😕\nВаш новий баланс: {bal_now} кредитів")
 
-            # якщо записів багато — робимо ZIP з частин
             if count > BACKLINKS_PART_ROWS:
                 zip_buf = io.BytesIO()
                 with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -538,13 +545,12 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_document(
                     document=InputFile(io.BytesIO(zip_bytes), filename=f"{domain}_backlinks_full.zip"),
                     caption=(f"Повний експорт для {domain}: {count} рядків (із ~{total}). "
-                             f"Файл: ZIP з CSV-частинами по {BACKLINKS_PART_ROWS}.\n"
+                             f"ZIP з частинами по {BACKLINKS_PART_ROWS}.\n"
                              f"💰 Списано {need_credits}. Баланс: {bal_now}")
                 )
                 await query.edit_message_text("Готово ✅")
                 return
             else:
-                # один CSV
                 buf = io.StringIO()
                 w = csv.writer(buf)
                 w.writerow(["url_from", "url_to", "anchor", "dofollow", "first_seen", "last_seen", "domain_from"])
@@ -573,28 +579,259 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         return
 
-# ====== Обробка меню (reply-клавіатура) ======
+# ====== Обробка меню (reply-клавіатура) + логіка Сервісів ======
 async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
 
-    # Wizard для сервісів
+    # Wizard для сервісів (після кліку на кнопку)
     aw = context.user_data.get("await_tool")
     if aw:
         context.user_data.pop("await_tool", None)
+
         if not dfs:
             return await update.message.reply_text("DataForSEO не сконфігуровано. Додайте DATAFORSEO_LOGIN/PASSWORD у .env")
 
         main, opts = _parse_opts(text)
         country = opts.get("country", "Ukraine")
-        lang = opts.get("lang", "Ukrainian")
-        limit = int(re.findall(r"\d+", opts.get("limit", "20"))[0]) if opts.get("limit") else 20
-        comps_raw = opts.get("comps") or opts.get("competitors") or ""
+        lang    = opts.get("lang", "Ukrainian")
+        limit   = int(re.findall(r"\d+", opts.get("limit", "20"))[0]) if opts.get("limit") else 20
+        prices  = {
+            "serp": SERP_CHARGE_UAH,
+            "keywords": KW_IDEAS_CHARGE_UAH,
+            "gap": GAP_CHARGE_UAH,
+            "backlinks_ov": BACKLINKS_CHARGE_UAH,
+            "audit": AUDIT_CHARGE_UAH,
+        }
+        need_credits = _uah_to_credits(prices.get(aw, 5.0))
+
+        if not charge(uid, need_credits, f"svc:{aw}", main or "-"):
+            return await update.message.reply_text(
+                f"Недостатньо кредитів (потрібно {need_credits}). Поповніть баланс.",
+                reply_markup=_topup_cta(),
+            )
 
         try:
-            # (тут залишено логіку з попередньої версії — SERP/keywords/gap/backlinks_ov/audit)
-            # ... без змін ...
-            return await update.message.reply_text("Прийшло, але інструмент ще не підв’язаний.")
+            # ===== SERP =====
+            if aw == "serp":
+                depth = int(re.findall(r"\d+", opts.get("depth", "10"))[0]) if opts.get("depth") else 10
+                resp = await dfs.serp_google_organic(main, location_name=country, language_name=lang, depth=depth)
+                items = _extract_first_items(resp)
+                if not items:
+                    bal_now = get_balance(uid)
+                    return await update.message.reply_text(f"Нічого не знайшов 😕\nБаланс: {bal_now}")
+
+                # текстове прев’ю
+                lines = []
+                for it in items[:10]:
+                    rank = it.get("rank_group") or it.get("rank_absolute") or it.get("rank")
+                    title = it.get("title") or it.get("domain") or "—"
+                    url = it.get("url") or it.get("link") or "—"
+                    itype = it.get("type") or it.get("serp_item_type")
+                    suf = f" [{itype}]" if itype and str(itype).lower() != "organic" else ""
+                    lines.append(f"{rank}. {title}\n{url}{suf}")
+                preview = "🔍 *Топ-10 Google*\n" + "\n\n".join(lines)
+
+                # CSV
+                buf = io.StringIO()
+                w = csv.writer(buf)
+                w.writerow(["rank", "title", "url", "type"])
+                for it in items:
+                    w.writerow([
+                        it.get("rank_group") or it.get("rank_absolute") or it.get("rank"),
+                        it.get("title") or it.get("domain") or "",
+                        it.get("url") or it.get("link") or "",
+                        it.get("type") or it.get("serp_item_type") or "",
+                    ])
+                csv_bytes = buf.getvalue().encode()
+
+                bal_now = get_balance(uid)
+                await update.message.reply_text(preview + f"\n\n💰 Списано {need_credits}. Баланс: {bal_now}", parse_mode="Markdown")
+                await update.message.reply_document(
+                    document=InputFile(io.BytesIO(csv_bytes), filename="serp_top.csv"),
+                    caption="CSV із результатами SERP"
+                )
+                return
+
+            # ===== Keywords Ideas =====
+            if aw == "keywords":
+                resp = await dfs.keywords_for_keywords(main, location_name=country, language_name=lang, limit=limit)
+                items = _extract_first_items(resp)
+                if not items:
+                    bal_now = get_balance(uid)
+                    return await update.message.reply_text(f"Нічого не знайшов 😕\nБаланс: {bal_now}")
+
+                lines = []
+                for it in items[:10]:
+                    kw  = it.get("keyword") or it.get("keyword_text") or "—"
+                    vol = it.get("search_volume") or it.get("avg_monthly_searches") or it.get("search_volume_avg") or "-"
+                    cpc = it.get("cpc") or it.get("cost_per_click") or "-"
+                    lines.append(f"• {kw} — vol: {vol}, CPC: {cpc}")
+                preview = "🧠 *Ідеї ключових*\n" + "\n".join(lines)
+
+                buf = io.StringIO()
+                w = csv.writer(buf)
+                w.writerow(["keyword", "search_volume", "cpc"])
+                for it in items:
+                    w.writerow([
+                        it.get("keyword") or it.get("keyword_text") or "",
+                        it.get("search_volume") or it.get("avg_monthly_searches") or it.get("search_volume_avg") or "",
+                        it.get("cpc") or it.get("cost_per_click") or "",
+                    ])
+                csv_bytes = buf.getvalue().encode()
+
+                bal_now = get_balance(uid)
+                await update.message.reply_text(preview + f"\n\n💰 Списано {need_credits}. Баланс: {bal_now}", parse_mode="Markdown")
+                await update.message.reply_document(
+                    document=InputFile(io.BytesIO(csv_bytes), filename="keyword_ideas.csv"),
+                    caption="CSV з ідеями ключових"
+                )
+                return
+
+            # ===== Keyword Gap =====
+            if aw == "gap":
+                comps_raw = opts.get("comps") or opts.get("competitors") or ""
+                competitors = [x.strip() for x in comps_raw.split(",") if x.strip()]
+                if not main or not competitors:
+                    return await update.message.reply_text("Формат: `mydomain.com | comps=site1.com,site2.com`", parse_mode="Markdown")
+
+                resp = await dfs.keywords_gap(main, competitors, location_name=country, language_name=lang, limit=limit)
+                items = _extract_first_items(resp)
+                if not items:
+                    bal_now = get_balance(uid)
+                    return await update.message.reply_text(f"Нічого не знайшов 😕\nБаланс: {bal_now}")
+
+                # preview 10 рядків
+                lines = []
+                for it in items[:10]:
+                    kw  = it.get("keyword") or it.get("keyword_text") or "—"
+                    vol = it.get("search_volume") or it.get("avg_monthly_searches") or "-"
+                    my  = it.get("target_rank") or it.get("rank") or "-"
+                    # конкурентні ранги можуть бути масивом або словником
+                    comp_ranks = it.get("competitor_ranks") or it.get("ranks") or {}
+                    if isinstance(comp_ranks, list):
+                        comp_disp = ", ".join(str(x) for x in comp_ranks[:3])
+                    elif isinstance(comp_ranks, dict):
+                        comp_disp = ", ".join(f"{k}:{v}" for k,v in list(comp_ranks.items())[:3])
+                    else:
+                        comp_disp = "-"
+                    lines.append(f"• {kw} — vol:{vol}, ми:{my}, конкуренти:{comp_disp}")
+                preview = "⚔️ *Keyword Gap*\n" + "\n".join(lines)
+
+                # CSV
+                buf = io.StringIO()
+                w = csv.writer(buf)
+                # колонок багато не вигадуємо, базові:
+                w.writerow(["keyword", "search_volume", "our_rank", "competitor_ranks"])
+                for it in items:
+                    kw  = it.get("keyword") or it.get("keyword_text") or ""
+                    vol = it.get("search_volume") or it.get("avg_monthly_searches") or ""
+                    my  = it.get("target_rank") or it.get("rank") or ""
+                    comp_ranks = it.get("competitor_ranks") or it.get("ranks") or {}
+                    if isinstance(comp_ranks, dict):
+                        comp_str = "; ".join(f"{k}:{v}" for k,v in comp_ranks.items())
+                    elif isinstance(comp_ranks, list):
+                        comp_str = "; ".join(str(x) for x in comp_ranks)
+                    else:
+                        comp_str = ""
+                    w.writerow([kw, vol, my, comp_str])
+                csv_bytes = buf.getvalue().encode()
+
+                bal_now = get_balance(uid)
+                await update.message.reply_text(preview + f"\n\n💰 Списано {need_credits}. Баланс: {bal_now}", parse_mode="Markdown")
+                await update.message.reply_document(
+                    document=InputFile(io.BytesIO(csv_bytes), filename="keyword_gap.csv"),
+                    caption="CSV з результатами Keyword Gap"
+                )
+                return
+
+            # ===== Backlinks Overview =====
+            if aw == "backlinks_ov":
+                target = main
+                summary = await dfs.backlinks_summary(target)
+                s = _extract_result(summary)  # один блок result
+
+                totals = s.get("totals") or {}
+                backlinks = totals.get("backlinks") or s.get("backlinks") or "-"
+                refdomains = totals.get("referring_domains") or s.get("referring_domains") or "-"
+                dofollow = totals.get("dofollow") or s.get("dofollow") or "-"
+                nofollow = totals.get("nofollow") or s.get("nofollow") or "-"
+
+                # топ реф.домени
+                rdom = await dfs.refdomains_live(target, limit=10, order_by="backlinks,desc")
+                r_items = _extract_first_items(rdom)
+                rd_lines = []
+                for it in r_items[:10]:
+                    d = it.get("domain") or it.get("referring_domain") or "-"
+                    b = it.get("backlinks") or "-"
+                    rd_lines.append(f"• {d} — {b} backlinks")
+
+                # топ анкори
+                anch = await dfs.anchors_live(target, limit=10, order_by="backlinks,desc")
+                a_items = _extract_first_items(anch)
+                a_lines = []
+                for it in a_items[:10]:
+                    a = it.get("anchor") or "-"
+                    b = it.get("backlinks") or "-"
+                    a_lines.append(f"• {a[:60]} — {b}")
+
+                bal_now = get_balance(uid)
+                txt = (
+                    f"🔗 *Backlinks огляд для* **{target}**\n"
+                    f"• Backlinks: {backlinks}\n"
+                    f"• Referring domains: {refdomains}\n"
+                    f"• Dofollow: {dofollow} | Nofollow: {nofollow}\n\n"
+                    f"Топ реф.доменів:\n" + ("\n".join(rd_lines) or "—") + "\n\n"
+                    f"Топ анкорів:\n" + ("\n".join(a_lines) or "—") + f"\n\n💰 Списано {need_credits}. Баланс: {bal_now}"
+                )
+                await update.message.reply_text(txt, parse_mode="Markdown")
+                return
+
+            # ===== Audit URL =====
+            if aw == "audit":
+                url = main
+                res = await dfs.onpage_instant(url)
+                r = _extract_result(res)
+                items = r.get("items") or []
+                it0 = items[0] if items else {}
+
+                status = it0.get("status_code") or it0.get("status") or "-"
+                meta = it0.get("meta") or {}
+                content = it0.get("content") or {}
+
+                title = meta.get("title") or ""
+                desc  = meta.get("description") or ""
+                canon = meta.get("canonical") or meta.get("canonical_url") or ""
+
+                # H1/H2 можуть бути в meta або в content у вигляді списків/рядків
+                def _norm_h(x):
+                    if isinstance(x, list):
+                        return [str(i)[:120] for i in x if i]
+                    if isinstance(x, str):
+                        return [x[:120]]
+                    return []
+                h1 = _norm_h(meta.get("h1") or content.get("h1"))
+                h2 = _norm_h(meta.get("h2") or content.get("h2"))
+
+                lines = [
+                    f"🛠️ *Аудит URL*",
+                    f"URL: {url}",
+                    f"Статус: {status}",
+                    f"Title: {title[:160]}",
+                    f"Description: {desc[:200]}",
+                    f"Canonical: {canon or '—'}",
+                    f"H1: {('; '.join(h1) if h1 else '—')}",
+                    f"H2: {('; '.join(h2[:5]) if h2 else '—')}",
+                ]
+                bal_now = get_balance(uid)
+                lines.append(f"\n💰 Списано {need_credits}. Баланс: {bal_now}")
+                await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+                return
+
+            # fallback (на випадок незнайомого коду інструмента)
+            bal_now = get_balance(uid)
+            return await update.message.reply_text(f"Інструмент поки не реалізовано. Баланс: {bal_now}")
+
         except HTTPError as e:
             log.exception("DataForSEO HTTP error")
             return await update.message.reply_text(f"DataForSEO HTTP error: {e}")
@@ -602,6 +839,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             log.exception("Unexpected error")
             return await update.message.reply_text(f"Помилка: {e}")
 
+    # Стандартні пункти меню
     if text == "🧰 Сервіси":
         return await services_menu(update, context)
     if text == "💳 Поповнити":
