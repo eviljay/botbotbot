@@ -790,11 +790,12 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.
+await update.message.reply_text(
+    f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
+    parse_mode="Markdown",
+    reply_markup=services_menu_keyboard()
+)
 
-Приклад:
-{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
-        return
 
     # Wizard для сервісів (після кліку на кнопку)
     aw = context.user_data.get("await_tool")
