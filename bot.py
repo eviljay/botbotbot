@@ -1,6 +1,7 @@
 # bot.py
 import os
 import io
+import re
 import csv
 import math
 import logging
@@ -291,32 +292,49 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
-    data = (query.data or "").split("|")
+    raw = (query.data or "").strip()
+    log.info("CB <- %s", raw)
+
+    parts = raw.split("|")
+    if not parts:
+        try:
+            return await query.edit_message_text("Кнопка застаріла. Відкрийте меню ще раз.")
+        except Exception:
+            return
+
+    cmd = parts[0]
 
     # --- Екран вибору провайдера / повернення назад ---
-    if data[0] == "topup_providers":
+    if cmd == "topup_providers":
         return await topup_providers(update, context)
 
     # --- Відкрити вибір сум для провайдера ---
-    if data[0] == "open_amounts":
-        provider = (data[1] if len(data) > 1 else "liqpay").lower()
+    if cmd == "open_amounts":
+        provider = (parts[1] if len(parts) > 1 else "liqpay").lower()
         return await open_amounts(update, context, provider)
 
-    # --- Пусті або ще не підключені провайдери ---
-    if data[0] == "provider_soon":
-        label = _provider_label(data[1] if len(data) > 1 else "")
+    # --- Ще не підключені провайдери ---
+    if cmd == "provider_soon":
+        label = _provider_label(parts[1] if len(parts) > 1 else "")
         return await query.answer(f"{label} ще не підключено", show_alert=False)
 
-    # --- Поповнення через обраного провайдера ---
-    if data[0] == "topup":
-        if len(data) < 3:
-            return await query.edit_message_text("Невірна команда поповнення.")
-        provider = data[1].lower()
+    # --- Поповнення (створення інвойсу) ---
+    if cmd == "topup":
+        provider = (parts[1] if len(parts) > 1 else "liqpay").lower()
+        amount_raw = parts[2] if len(parts) > 2 else ""
+        # дозволяємо «брудні» значення:  "100₴", "100.0", "100 грн"
+        amount_clean = re.sub(r"[^\d.]", "", str(amount_raw))
         try:
-            amount_uah = int(data[2])
+            amount_uah = int(float(amount_clean))
+            if amount_uah <= 0:
+                raise ValueError
         except Exception:
-            return await query.edit_message_text("Невірна сума.")
+            try:
+                return await query.edit_message_text("Невірна сума. Оберіть її заново через «💳 Поповнити».")
+            except Exception:
+                return
 
+        # стукаємось у наш бекенд
         try:
             async with AsyncClient(timeout=20) as c:
                 r = await c.post(
@@ -334,15 +352,12 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             body = getattr(e.response, "text", "")[:400]
             return await query.edit_message_text(f"Помилка створення платежу: {e}\n{body}")
 
-        # ===== Формування pay_url =====
         pay_url = resp.get("pay_url") or resp.get("invoiceUrl")
         order_id = resp.get("order_id")
 
-        # Якщо API віддав data+signature — самі збираємо checkout URL (LiqPay)
         if not pay_url and resp.get("data") and resp.get("signature"):
             pay_url = f"https://www.liqpay.ua/api/3/checkout?data={resp['data']}&signature={resp['signature']}"
 
-        # Резервний варіант: /pay/{order_id} на публічному домені (для LiqPay)
         if not pay_url and order_id:
             pay_url = f"{PUBLIC_BASE}/pay/{order_id}"
 
@@ -356,67 +371,76 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         label = _provider_label(provider)
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"💳 Оплатити ({label})", url=pay_url)]])
+        # окремим повідомленням із кнопкою
         await context.bot.send_message(
             chat_id=uid,
             text=(f"Рахунок створено на {amount_uah}₴ ({label}).\n"
-                  f"Тисни кнопку нижче або відкрий лінк вручну:\n{pay_url}"),
+                  f"Натисніть кнопку нижче або відкрийте лінк:\n{pay_url}"),
             reply_markup=kb
         )
+        # і прибираємо старе меню/пояснюємо
         try:
-            await query.edit_message_text("Рахунок створено, дивись наступне повідомлення з кнопкою.")
+            await query.edit_message_text("Рахунок створено, дивись повідомлення з кнопкою нижче ⬇️")
         except Exception:
             pass
         return
 
     # --- Платні дії (backlinks) ---
-    if len(data) != 3:
-        return await query.edit_message_text("Невірний запит.")
-    action, domain, scope = data
+    if cmd in ("show", "csv") and len(parts) == 3:
+        _, domain, scope = parts
+        need_credits = _uah_to_credits(BACKLINKS_CHARGE_UAH)
 
-    need_credits = _uah_to_credits(BACKLINKS_CHARGE_UAH)
-
-    if not charge(uid, need_credits, domain, scope):
-        rows = []
-        for amount in TOPUP_OPTIONS:
-            credits = int(amount // CREDIT_PRICE_UAH)
-            rows.append([InlineKeyboardButton(f"💳 Поповнити {amount}₴ (~{credits} кредитів)", callback_data=f"open_amounts|liqpay")])
-        return await query.edit_message_text(
-            f"Недостатньо кредитів (потрібно {need_credits}). Поповніть баланс.",
-            reply_markup=InlineKeyboardMarkup(rows)
-        )
-
-    try:
-        limit = PREVIEW_COUNT if scope == "10" else CSV_MAX
-        data_resp = await dfs.backlinks_live(domain, limit=limit, order_by="first_seen,desc")
-        items = _extract_items(data_resp)
-        if not items:
-            bal_now = get_balance(uid)
-            return await query.edit_message_text(f"Нічого не знайшов 😕\nВаш новий баланс: {bal_now} кредитів")
-
-        if action == "show":
-            cap = PREVIEW_COUNT if scope == "10" else min(50, len(items))
-            txt = _fmt_preview(items, cap)
-            bal_now = get_balance(uid)
-            if scope == "all" and len(items) > cap:
-                txt += f"\n\n…показано перші {cap} з {len(items)}."
-            txt += f"\n\n💰 Списано {need_credits} кредит(и). Новий баланс: {bal_now}"
-            await query.edit_message_text(txt)
-        elif action == "csv":
-            csv_bytes = _items_to_csv_bytes(items)
-            bal_now = get_balance(uid)
-            await query.message.reply_document(
-                document=InputFile(io.BytesIO(csv_bytes), filename=f"{domain}_backlinks_{scope}.csv"),
-                caption=f"Експорт для {domain} ({'10' if scope=='10' else 'all'})\n💰 Списано {need_credits}. Новий баланс: {bal_now}"
+        if not charge(uid, need_credits, domain, scope):
+            rows = []
+            for amount in TOPUP_OPTIONS:
+                credits = int(amount // CREDIT_PRICE_UAH)
+                rows.append([InlineKeyboardButton(
+                    f"💳 Поповнити {amount}₴ (~{credits} кредитів)",
+                    callback_data="open_amounts|liqpay"
+                )])
+            return await query.edit_message_text(
+                f"Недостатньо кредитів (потрібно {need_credits}). Поповніть баланс.",
+                reply_markup=InlineKeyboardMarkup(rows)
             )
-            await query.edit_message_text("Готово ✅")
-        else:
-            await query.edit_message_text("Невідома дія.")
-    except HTTPError as e:
-        log.exception("HTTP error")
-        await query.edit_message_text(f"DataForSEO HTTP error: {e}")
-    except Exception as e:
-        log.exception("Unexpected error")
-        await query.edit_message_text(f"Помилка: {e}")
+
+        try:
+            limit = PREVIEW_COUNT if scope == "10" else CSV_MAX
+            data_resp = await dfs.backlinks_live(domain, limit=limit, order_by="first_seen,desc")
+            items = _extract_items(data_resp)
+            if not items:
+                bal_now = get_balance(uid)
+                return await query.edit_message_text(f"Нічого не знайшов 😕\nВаш новий баланс: {bal_now} кредитів")
+
+            if cmd == "show":
+                cap = PREVIEW_COUNT if scope == "10" else min(50, len(items))
+                txt = _fmt_preview(items, cap)
+                bal_now = get_balance(uid)
+                if scope == "all" and len(items) > cap:
+                    txt += f"\n\n…показано перші {cap} з {len(items)}."
+                txt += f"\n\n💰 Списано {need_credits} кредит(и). Новий баланс: {bal_now}"
+                await query.edit_message_text(txt)
+            else:  # csv
+                csv_bytes = _items_to_csv_bytes(items)
+                bal_now = get_balance(uid)
+                await query.message.reply_document(
+                    document=InputFile(io.BytesIO(csv_bytes), filename=f"{domain}_backlinks_{scope}.csv"),
+                    caption=f"Експорт для {domain} ({'10' if scope=='10' else 'all'})\n💰 Списано {need_credits}. Новий баланс: {bal_now}"
+                )
+                await query.edit_message_text("Готово ✅")
+        except HTTPError as e:
+            log.exception("HTTP error")
+            await query.edit_message_text(f"DataForSEO HTTP error: {e}")
+        except Exception as e:
+            log.exception("Unexpected error")
+            await query.edit_message_text(f"Помилка: {e}")
+        return
+
+    # --- Все інше (застарілі або невідомі кнопки) ---
+    try:
+        return await query.edit_message_text("Кнопка застаріла або формат невірний. Відкрийте меню ще раз: /topup")
+    except Exception:
+        return
+
 
 # ====== Обробка меню ======
 async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
