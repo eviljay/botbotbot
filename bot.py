@@ -869,15 +869,44 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Стандартні пункти меню
     if text == "🧰 Сервіси":
-        return await services_menu(update, context)
+    txt = (
+        "🧰 Сервіси\n\n"
+        "Обери інструмент знизу. Після вибору надішли параметри в одному рядку з опціями через |.\n\n"
+        "Приклади:\n"
+        "• SERP: iphone 13 | country=Ukraine | lang=Ukrainian | depth=10\n"
+        "• Ідеї ключових: seo tools | country=Ukraine | lang=Ukrainian | limit=20\n"
+        "• Gap: mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50\n"
+        "• Backlinks огляд: mydomain.com\n"
+        "• Аудит: https://example.com/page"
+    )
+        return await update.message.reply_text(
+        txt,
+        reply_markup=services_reply_keyboard(),
+        disable_web_page_preview=True
+    )
     if text == "💳 Поповнити":
         return await topup_providers(update, context)
     if text == "📊 Баланс":
         return await balance(update, context)
+    if text == "⬅️ Назад":
+        return await update.message.reply_text(
+        "Повернулися до головного меню.",
+        reply_markup=main_menu_keyboard(_registered(uid))
+    )
     if text == "📱 Реєстрація":
         if _registered(uid):
             return await update.message.reply_text("Ви вже зареєстровані ✅", reply_markup=main_menu_keyboard(True))
         return await register_cmd_or_menu(update, context)
+    if text in SERVICE_TEXT_TO_TOOL:
+     tool = SERVICE_TEXT_TO_TOOL[text]
+     context.user_data["await_tool"] = tool
+     prompt = SERVICE_PROMPTS.get(tool, "Надішліть параметри в одному рядку.")
+         return await update.message.reply_text(
+        prompt,
+        reply_markup=services_reply_keyboard(),
+        disable_web_page_preview=True
+    )
+
 
 # ====== АДМІНКА ======
 def _db() -> sqlite3.Connection:
