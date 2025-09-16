@@ -175,7 +175,7 @@ async def keywords_gap(
             )
             results.append({"competitor": target1, "data": res})
 
-        return results
+        return results 
 
     # ========= On-Page instant =========
     async def onpage_instant(self, url: str):
