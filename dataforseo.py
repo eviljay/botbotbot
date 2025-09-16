@@ -114,53 +114,103 @@ class DataForSEO:
         }
         return await self._post_array("/v3/serp/google/organic/live/advanced", [task])
 
-    # ========= Keywords: ideas + volume =========
-    async def related_keywords(
-        self,
-        seed: str,
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
-        limit: int = 20,
-    ):
-        task = {
-            "keywords": [seed],
-            "location_name": location_name,
-            "language_name": language_name,
-            "limit": limit,
-        }
-        return await self._post_array("/v3/keywords_data/related_keywords/live", [task])
+      # ===== Keywords Ideas =====
+            if aw == "keywords":
+                # 1) тягнемо ідеї
+                resp = await dfs.related_keywords(
+                    main,
+                    location_name=country,
+                    language_name=lang,
+                    limit=limit,
+                )
+                items = _extract_first_items(resp)
+                if not items:
+                    bal_now = get_balance(uid)
+                    return await update.message.reply_text(f"Нічого не знайшов 😕\nБаланс: {bal_now}")
 
-    async def google_ads_search_volume(
-        self,
-        keywords: List[str],
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
-    ):
-        task = {
-            "keywords": keywords,
-            "location_name": location_name,
-            "language_name": language_name,
-        }
-        return await self._post_array("/v3/keywords_data/google_ads/search_volume/live", [task])
+                # 2) готуємо список ключів для volume/CPC
+                kw_list = []
+                for it in items:
+                    k = (it.get("keyword")
+                         or (it.get("keyword_data") or {}).get("keyword")
+                         or it.get("keyword_text"))
+                    if k:
+                        kw_list.append(k.strip())
+                # унікалізуємо, обрізаємо, щоб не переборщити з апі
+                kw_list = list(dict.fromkeys(kw_list))[:200]
 
-    # ========= Labs: Keyword Gap =========
-    async def keywords_gap(
-        self,
-        target: str,
-        competitors: List[str],
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
-        limit: int = 50,
-    ):
-        task = {
-            "target": target,
-            "competitors": competitors,
-            "location_name": location_name,
-            "language_name": language_name,
-            "se_type": "google",
-            "limit": limit,
-        }
-        return await self._post_array("/v3/dataforseo_labs/keyword_intersections/live", [task])
+                # 3) тягнемо обсяги/CPC (якщо є що тягнути)
+                vol_map = {}
+                if kw_list:
+                    vresp = await dfs.google_ads_search_volume(
+                        kw_list,
+                        location_name=country,
+                        language_name=lang,
+                    )
+                    vitems = _extract_first_items(vresp)
+                    for vi in vitems:
+                        kk  = vi.get("keyword") or vi.get("keyword_text")
+                        vol = (vi.get("search_volume")
+                               or vi.get("avg_monthly_searches")
+                               or vi.get("search_volume_avg")
+                               or 0)
+                        cpc = vi.get("cpc") or vi.get("average_cpc") or 0
+                        if kk:
+                            vol_map[kk.lower()] = (vol, cpc)
+
+                # 4) прев’ю 10 рядків (без Markdown, щоб не ловити Can't parse entities)
+                lines = []
+                for it in items[:10]:
+                    kk = (it.get("keyword")
+                          or (it.get("keyword_data") or {}).get("keyword")
+                          or it.get("keyword_text")
+                          or "—")
+                    vol, cpc = vol_map.get((kk or "").lower(), ("-", "-"))
+                    lines.append(f"• {kk} — vol: {vol}, CPC: {cpc}")
+
+                preview = "🧠 Ідеї ключових (топ-10):\n" + "\n".join(lines)
+
+                # 5) CSV (повний список із vol/CPC де є)
+                import io, csv
+                buf = io.StringIO()
+                w = csv.writer(buf)
+                w.writerow(["keyword", "search_volume", "cpc"])
+                for k in kw_list:
+                    vol, cpc = vol_map.get(k.lower(), ("", ""))
+                    w.writerow([k, vol, cpc])
+                csv_bytes = buf.getvalue().encode()
+
+                bal_now = get_balance(uid)
+                # ВАЖЛИВО: без parse_mode, щоб не падало на спецсимволах у ключах
+                await update.message.reply_text(preview + f"\n\n💰 Списано {need_credits}. Баланс: {bal_now}")
+                await update.message.reply_document(
+                    document=InputFile(io.BytesIO(csv_bytes), filename="keyword_ideas.csv"),
+                    caption="CSV з ідеями ключових (із обсягом/CPC де доступно)"
+                )
+                return
+
+# ========= Labs: Keyword Gap =========
+async def keywords_gap(
+    self,
+    target: str,
+    competitors: List[str],
+    location_name: str = "Ukraine",
+    language_name: str = "Ukrainian",
+    limit: int = 50,
+):
+    task = {
+        "target": target,
+        "competitors": competitors,
+        "location_name": location_name,
+        "language_name": language_name,
+        "limit": limit,
+    }
+    # DataForSEO Labs: google/keyword_intersections/live
+    return await self._post_array(
+        "/v3/dataforseo_labs/google/keyword_intersections/live",
+        [task]
+    )
+
 
     # ========= On-Page instant =========
     async def onpage_instant(self, url: str):
