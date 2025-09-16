@@ -124,33 +124,6 @@ def main_menu_keyboard(registered: bool) -> ReplyKeyboardMarkup:
         ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
-
-def services_reply_keyboard() -> ReplyKeyboardMarkup:
-    rows = [
-        [KeyboardButton("🔍 SERP"), KeyboardButton("🧠 Ідеї ключових")],
-        [KeyboardButton("⚔️ Gap"), KeyboardButton("🔗 Backlinks огляд")],
-        [KeyboardButton("🛠️ Аудит URL")],
-        [KeyboardButton("⬅️ Назад")],
-    ]
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
-
-SERVICE_TEXT_TO_TOOL = {
-    "🔍 SERP": "serp",
-    "🧠 Ідеї ключових": "keywords",
-    "⚔️ Gap": "gap",
-    "🔗 Backlinks огляд": "backlinks_ov",
-    "🛠️ Аудит URL": "audit",
-}
-
-SERVICE_PROMPTS = {
-    "serp": "🔍 SERP: введіть запит. Опційно: | country=Ukraine | lang=Ukrainian | depth=10",
-    "keywords": "🧠 Ідеї ключових: введіть seed. Опційно: | country=Ukraine | lang=Ukrainian | limit=20",
-    "gap": "⚔️ Gap: mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50",
-    "backlinks_ov": "🔗 Backlinks огляд: введіть домен: mydomain.com",
-    "audit": "🛠️ Аудит: введіть URL: https://example.com/page",
-}
-
-
 def _extract_first_items(resp: dict) -> List[dict]:
     tasks = resp.get("tasks") or []
     if not tasks:
@@ -868,7 +841,8 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text(f"Помилка: {e}")
 
     # Стандартні пункти меню
-    
+    if text == "🧰 Сервіси":
+        return await services_menu(update, context)
     if text == "💳 Поповнити":
         return await topup_providers(update, context)
     if text == "📊 Баланс":
