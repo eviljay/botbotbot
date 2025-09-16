@@ -1,4 +1,3 @@
-
 import os
 import io
 import re
@@ -7,6 +6,8 @@ import math
 import logging
 import sqlite3
 import zipfile
+import asyncio
+from telegram.error import TelegramError, BadRequest
 from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
