@@ -1,3 +1,4 @@
+
 import os
 import io
 import re
@@ -6,7 +7,7 @@ import math
 import logging
 import sqlite3
 import zipfile
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
 from httpx import AsyncClient, ConnectError, HTTPError
@@ -89,7 +90,7 @@ SERP_CHARGE_UAH                   = _parse_float_env("SERP_CHARGE_UAH", 5.0)
 KW_IDEAS_CHARGE_UAH               = _parse_float_env("KW_IDEAS_CHARGE_UAH", 5.0)
 GAP_CHARGE_UAH                    = _parse_float_env("GAP_CHARGE_UAH", 10.0)
 BACKLINKS_CHARGE_UAH              = _parse_float_env("BACKLINKS_CHARGE_UAH", 5.0)
-BACKLINKS_FULL_EXPORT_CHARGE_UAH  = _parse_float_env("BACKLINKS_FULL_EXPORT_CHARGE_UAH", BACKLINKS_CHARGE_UAH)
+BACKLINKS_FULL_EXPORT_CHARGE_UAH  = _parse_float_env("BACKLINKS_FULL_EXPORT_CHARGE_UAH", 5.0)
 AUDIT_CHARGE_UAH                  = _parse_float_env("AUDIT_CHARGE_UAH", 5.0)
 
 # налаштування експорту
@@ -124,12 +125,9 @@ def main_menu_keyboard(registered: bool) -> ReplyKeyboardMarkup:
         ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
-
-
 def services_menu_keyboard() -> ReplyKeyboardMarkup:
     """
-    Bottom (reply) keyboard for Services mode.
-    Hides Top-up and Balance, shows service shortcuts + Back.
+    Нижнє меню сервісів: без Поповнити/Баланс, з кнопкою Назад.
     """
     rows = [
         [KeyboardButton("🔍 SERP"), KeyboardButton("🧠 Keyword Ideas")],
@@ -138,12 +136,9 @@ def services_menu_keyboard() -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
-
-
 async def _set_menu_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE, kb: ReplyKeyboardMarkup):
     """
-    Try to switch the bottom reply keyboard with minimal noise.
-    Sends a tiny invisible message if we don't have a message to edit.
+    Перемикає нижню клавіатуру з мінімальним шумом. Якщо нема, шле непомітний плейсхолдер.
     """
     chat_id = update.effective_chat.id
     last_id = context.chat_data.get("menu_msg_id")
@@ -153,11 +148,8 @@ async def _set_menu_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE,
             return
     except Exception:
         pass
-    # Fallback: send a minimal placeholder to attach the keyboard
-    msg = await context.bot.send_message(chat_id, "​", reply_markup=kb)  # zero-width space
+    msg = await context.bot.send_message(chat_id, "\u200b", reply_markup=kb)  # zero-width space
     context.chat_data["menu_msg_id"] = msg.message_id
-
-
 
 def _extract_first_items(resp: dict) -> List[dict]:
     tasks = resp.get("tasks") or []
@@ -197,7 +189,7 @@ def _topup_cta() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(rows)
 
-def _parse_opts(line: str):
+def _parse_opts(line: str) -> Tuple[str, dict]:
     parts = [p.strip() for p in line.split("|")]
     main = parts[0] if parts else ""
     opts = {}
@@ -262,18 +254,13 @@ async def services_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Аудит: `https://example.com/page`"
     )
     if update.message:
-        await update.message.reply_text(text, reply_markup=_services_kb(), disable_web_page_preview=True)
+        await update.message.reply_text(text, reply_markup=_services_kb(), disable_web_page_preview=True, parse_mode="Markdown")
     else:
-        await update.callback_query.edit_message_text(text, reply_markup=_services_kb(), disable_web_page_preview=True)
-
+        await update.callback_query.edit_message_text(text, reply_markup=_services_kb(), disable_web_page_preview=True, parse_mode="Markdown")
 
 # ====== /start ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-
-
-    
-    
     ensure_user(uid)
     bal = get_balance(uid)
     reg = _registered(uid)
@@ -287,11 +274,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             param = parts[1].strip()
 
     if param == TELEGRAM_START_PARAM:
-        await update.message.reply_text(
+        msg = await update.message.reply_text(
             "Дякуємо! Якщо платіж пройшов, баланс оновиться протягом хвилини.\n"
             "Перевірте /balance або натисніть «📊 Баланс».",
             reply_markup=main_menu_keyboard(reg)
         )
+        context.chat_data["menu_msg_id"] = msg.message_id
+        context.chat_data["in_services"] = False
         return
 
     text = (
@@ -305,16 +294,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Ваш баланс: {bal} кредитів"
     )
     msg = await update.message.reply_text(text, reply_markup=main_menu_keyboard(reg))
-    context.chat_data['menu_msg_id'] = msg.message_id
-    context.chat_data['in_services'] = False
+    context.chat_data["menu_msg_id"] = msg.message_id
+    context.chat_data["in_services"] = False
 
 # ====== Реєстрація ======
 def _normalize_phone(p: str) -> str:
     digits = "".join(ch for ch in p if ch.isdigit())
-    return ("+" + digits) if digits and not p.strip().startswith("+") else (p if p.startswith("+") else "+" + digits)
+    if not digits:
+        return p
+    if p.strip().startswith("+"):
+        return p
+    return "+" + digits
 
 async def register_cmd_or_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    
+    uid = update.effective_user.id
     ensure_user(uid)
 
     if _registered(uid):
@@ -328,7 +321,35 @@ async def register_cmd_or_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     return WAIT_PHONE
 
 async def on_contact_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    
+    uid = update.effective_user.id
+    contact = update.message.contact
+    if not contact or (contact.user_id and contact.user_id != uid):
+        kb = [[KeyboardButton("📱 Поділитись номером", request_contact=True)]]
+        await update.message.reply_text(
+            "Будь ласка, поділіться **власним** контактом.",
+            reply_markup=ReplyKeyboardMarkup(kb, one_time_keyboard=True, resize_keyboard=True),
+        )
+        return WAIT_PHONE
+
+    phone_norm = _normalize_phone(contact.phone_number or "")
+    is_new, credited = register_or_update_phone(uid, phone_norm, initial_bonus=INITIAL_BONUS)
+    bal = get_balance(uid)
+
+    if is_new and credited > 0:
+        msg = f"✅ Дякуємо за реєстрацію!\nНараховано бонус: +{credited} кредитів.\nВаш баланс: {bal}"
+    else:
+        msg = f"✅ Телефон збережено.\nВаш баланс: {bal}"
+
+    await update.message.reply_text(msg, reply_markup=main_menu_keyboard(True))
+    return ConversationHandler.END
+
+async def cancel_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Скасовано.", reply_markup=main_menu_keyboard(_registered(update.effective_user.id)))
+    return ConversationHandler.END
+
+# ====== Баланс ======
+async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
     ensure_user(uid)
     bal = get_balance(uid)
     reg_text = "✅ телефон додано" if _registered(uid) else "❌ немає телефону (використайте Реєстрація)"
@@ -374,35 +395,12 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode="Markdown",
     )
-# ====== Баланс ======
-async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    ensure_user(uid)
-    bal = get_balance(uid)
-    reg_text = "✅ телефон додано" if _registered(uid) else "❌ немає телефону (використайте Реєстрація)"
-    await update.message.reply_text(f"Баланс: {bal} кредитів\nРеєстрація: {reg_text}")
 
 # ====== CALLBACKS (services entry, topup, backlinks) ======
 async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
-
-
-    # Service shortcuts (reply keyboard)
-    if text in ("🔍 SERP", "🧠 Keyword Ideas", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
-        # Map button to tool key and prompt format
-        mapping = {
-            "🔍 SERP": ("serp", "SERP: `iphone 13 | country=Ukraine | lang=Ukrainian | depth=10`"),
-            "🧠 Keyword Ideas": ("keywords", "Keywords: `seo tools | country=Ukraine | lang=Ukrainian | limit=20`"),
-            "⚔️ Gap": ("gap", "Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50`"),
-            "🔗 Backlinks": ("backlinks_ov", "Backlinks: `mydomain.com`"),
-            "🛠️ Аудит": ("audit", "Audit: `https://example.com/page`"),
-        }
-        tool, hint = mapping[text]
-        context.user_data["await_tool"] = tool
-        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
-        return
     raw = (query.data or "").strip()
     log.info("CB <- %s", raw)
 
@@ -427,7 +425,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "audit": "🛠️ Аудит: введіть URL: `https://example.com/page`",
         }
         text = prompts.get(tool, "Надішліть параметри в одному рядку.")
-        return await query.edit_message_text(text, disable_web_page_preview=True)
+        return await query.edit_message_text(text, disable_web_page_preview=True, parse_mode="Markdown")
 
     # --- Екран вибору провайдера / повернення ---
     if cmd == "topup_providers":
@@ -554,7 +552,6 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             # повний експорт
-            from dataforseo import DataForSEO  # just to be safe in some linters
             items_all, total = await dfs.backlinks_all(
                 domain, order_by="first_seen,desc", page_size=BACKLINKS_PAGE_SIZE, max_total=MAX_BACKLINKS_EXPORT
             )
@@ -621,7 +618,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
 
-    # Toggle bottom menus
+    # Перемикач нижніх меню
     if text in ("🧰 Сервіси", "Сервіси"):
         context.chat_data["in_services"] = True
         await _set_menu_keyboard(update, context, services_menu_keyboard())
@@ -629,12 +626,11 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "⬅️ Назад":
         context.chat_data["in_services"] = False
-        await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(update.effective_user.id)))
+        await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(uid)))
         return
 
-    # Service shortcuts (reply keyboard)
+    # Швидкий вибір сервісу (reply-кнопки)
     if text in ("🔍 SERP", "🧠 Keyword Ideas", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
-        # Map button to tool key and prompt format
         mapping = {
             "🔍 SERP": ("serp", "SERP: `iphone 13 | country=Ukraine | lang=Ukrainian | depth=10`"),
             "🧠 Keyword Ideas": ("keywords", "Keywords: `seo tools | country=Ukraine | lang=Ukrainian | limit=20`"),
@@ -644,12 +640,17 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
-        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
+        await update.message.reply_text(
+            f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
+            parse_mode="Markdown",
+            reply_markup=services_menu_keyboard()
+        )
         return
 
-    # Wizard для сервісів (після кліку на кнопку)
+    # Wizard для сервісів
     aw = context.user_data.get("await_tool")
     if aw:
+        # зберігаємо, але очищаємо прапор (щоб кожен запит був одноразовим)
         context.user_data.pop("await_tool", None)
 
         if not dfs:
@@ -684,7 +685,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     bal_now = get_balance(uid)
                     return await update.message.reply_text(f"Нічого не знайшов 😕\nБаланс: {bal_now}")
 
-                # текстове прев’ю
                 lines = []
                 for it in items[:10]:
                     rank = it.get("rank_group") or it.get("rank_absolute") or it.get("rank")
@@ -695,7 +695,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lines.append(f"{rank}. {title}\n{url}{suf}")
                 preview = "🔍 *Топ-10 Google*\n" + "\n\n".join(lines)
 
-                # CSV
                 buf = io.StringIO()
                 w = csv.writer(buf)
                 w.writerow(["rank", "title", "url", "type"])
@@ -758,46 +757,48 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not main or not competitors:
                     return await update.message.reply_text("Формат: `mydomain.com | comps=site1.com,site2.com`", parse_mode="Markdown")
 
-                resp = await dfs.keywords_gap(main, competitors, location_name=country, language_name=lang, limit=limit)
-                items = _extract_first_items(resp)
-                if not items:
+                # Виконуємо запит попарно до кожного конкурента
+                rows = []
+                for comp in competitors:
+                    try:
+                        resp = await dfs.domain_intersection_gap(main, comp, location_name=country, language_name=lang, limit=limit)
+                    except AttributeError:
+                        # якщо у твоєму клієнті інша назва — можна замінити на правильний метод
+                        resp = await dfs.keywords_gap(main, [comp], location_name=country, language_name=lang, limit=limit)
+                    items = _extract_first_items(resp)
+                    for it in items:
+                        kw  = it.get("keyword") or it.get("keyword_text") or ""
+                        vol = it.get("search_volume") or it.get("avg_monthly_searches") or ""
+                        my  = it.get("target_rank") or it.get("rank") or ""
+                        comp_ranks = it.get("competitor_ranks") or it.get("ranks") or {}
+                        rows.append((kw, vol, my, comp, comp_ranks))
+
+                if not rows:
                     bal_now = get_balance(uid)
                     return await update.message.reply_text(f"Нічого не знайшов 😕\nБаланс: {bal_now}")
 
-                # preview 10 рядків
                 lines = []
-                for it in items[:10]:
-                    kw  = it.get("keyword") or it.get("keyword_text") or "—"
-                    vol = it.get("search_volume") or it.get("avg_monthly_searches") or "-"
-                    my  = it.get("target_rank") or it.get("rank") or "-"
-                    # конкурентні ранги можуть бути масивом або словником
-                    comp_ranks = it.get("competitor_ranks") or it.get("ranks") or {}
-                    if isinstance(comp_ranks, list):
-                        comp_disp = ", ".join(str(x) for x in comp_ranks[:3])
-                    elif isinstance(comp_ranks, dict):
-                        comp_disp = ", ".join(f"{k}:{v}" for k,v in list(comp_ranks.items())[:3])
+                for kw, vol, my, comp, comp_ranks in rows[:10]:
+                    if isinstance(comp_ranks, dict):
+                        comp_str = ", ".join(f"{k}:{v}" for k, v in list(comp_ranks.items())[:3])
+                    elif isinstance(comp_ranks, list):
+                        comp_str = ", ".join(str(x) for x in comp_ranks[:3])
                     else:
-                        comp_disp = "-"
-                    lines.append(f"• {kw} — vol:{vol}, ми:{my}, конкуренти:{comp_disp}")
+                        comp_str = "-"
+                    lines.append(f"• {kw} — vol:{vol}, ми:{my}, vs {comp}: {comp_str}")
                 preview = "⚔️ *Keyword Gap*\n" + "\n".join(lines)
 
-                # CSV
                 buf = io.StringIO()
                 w = csv.writer(buf)
-                # колонок багато не вигадуємо, базові:
-                w.writerow(["keyword", "search_volume", "our_rank", "competitor_ranks"])
-                for it in items:
-                    kw  = it.get("keyword") or it.get("keyword_text") or ""
-                    vol = it.get("search_volume") or it.get("avg_monthly_searches") or ""
-                    my  = it.get("target_rank") or it.get("rank") or ""
-                    comp_ranks = it.get("competitor_ranks") or it.get("ranks") or {}
+                w.writerow(["keyword", "search_volume", "our_rank", "competitor", "competitor_ranks"])
+                for kw, vol, my, comp, comp_ranks in rows:
                     if isinstance(comp_ranks, dict):
-                        comp_str = "; ".join(f"{k}:{v}" for k,v in comp_ranks.items())
+                        comp_str = "; ".join(f"{k}:{v}" for k, v in comp_ranks.items())
                     elif isinstance(comp_ranks, list):
                         comp_str = "; ".join(str(x) for x in comp_ranks)
                     else:
                         comp_str = ""
-                    w.writerow([kw, vol, my, comp_str])
+                    w.writerow([kw, vol, my, comp, comp_str])
                 csv_bytes = buf.getvalue().encode()
 
                 bal_now = get_balance(uid)
@@ -820,7 +821,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 dofollow = totals.get("dofollow") or s.get("dofollow") or "-"
                 nofollow = totals.get("nofollow") or s.get("nofollow") or "-"
 
-                # топ реф.домени
                 rdom = await dfs.refdomains_live(target, limit=10, order_by="backlinks,desc")
                 r_items = _extract_first_items(rdom)
                 rd_lines = []
@@ -829,7 +829,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     b = it.get("backlinks") or "-"
                     rd_lines.append(f"• {d} — {b} backlinks")
 
-                # топ анкори
                 anch = await dfs.anchors_live(target, limit=10, order_by="backlinks,desc")
                 a_items = _extract_first_items(anch)
                 a_lines = []
@@ -866,7 +865,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 desc  = meta.get("description") or ""
                 canon = meta.get("canonical") or meta.get("canonical_url") or ""
 
-                # H1/H2 можуть бути в meta або в content у вигляді списків/рядків
                 def _norm_h(x):
                     if isinstance(x, list):
                         return [str(i)[:120] for i in x if i]
@@ -891,7 +889,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
                 return
 
-            # fallback (на випадок незнайомого коду інструмента)
+            # fallback
             bal_now = get_balance(uid)
             return await update.message.reply_text(f"Інструмент поки не реалізовано. Баланс: {bal_now}")
 
@@ -952,22 +950,6 @@ def _admin_kb(page: int) -> InlineKeyboardMarkup:
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-
-
-    # Service shortcuts (reply keyboard)
-    if text in ("🔍 SERP", "🧠 Keyword Ideas", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
-        # Map button to tool key and prompt format
-        mapping = {
-            "🔍 SERP": ("serp", "SERP: `iphone 13 | country=Ukraine | lang=Ukrainian | depth=10`"),
-            "🧠 Keyword Ideas": ("keywords", "Keywords: `seo tools | country=Ukraine | lang=Ukrainian | limit=20`"),
-            "⚔️ Gap": ("gap", "Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50`"),
-            "🔗 Backlinks": ("backlinks_ov", "Backlinks: `mydomain.com`"),
-            "🛠️ Аудит": ("audit", "Audit: `https://example.com/page`"),
-        }
-        tool, hint = mapping[text]
-        context.user_data["await_tool"] = tool
-        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
-        return
     if not _admin_check(uid):
         return await update.message.reply_text("⛔️ Доступ заборонено.")
     text = _render_users_page(1)
@@ -977,22 +959,6 @@ async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
-
-
-    # Service shortcuts (reply keyboard)
-    if text in ("🔍 SERP", "🧠 Keyword Ideas", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
-        # Map button to tool key and prompt format
-        mapping = {
-            "🔍 SERP": ("serp", "SERP: `iphone 13 | country=Ukraine | lang=Ukrainian | depth=10`"),
-            "🧠 Keyword Ideas": ("keywords", "Keywords: `seo tools | country=Ukraine | lang=Ukrainian | limit=20`"),
-            "⚔️ Gap": ("gap", "Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50`"),
-            "🔗 Backlinks": ("backlinks_ov", "Backlinks: `mydomain.com`"),
-            "🛠️ Аудит": ("audit", "Audit: `https://example.com/page`"),
-        }
-        tool, hint = mapping[text]
-        context.user_data["await_tool"] = tool
-        await update.message.reply_text(f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}", parse_mode="Markdown", reply_markup=services_menu_keyboard())
-        return
     if not _admin_check(uid):
         return await query.edit_message_text("⛔️ Доступ заборонено.")
     parts = (query.data or "").split("|")
