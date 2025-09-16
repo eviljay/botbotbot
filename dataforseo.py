@@ -1,7 +1,8 @@
 # dataforseo.py
 import base64
-import httpx
 from typing import List, Tuple, Optional
+
+import httpx
 
 
 class DataForSEO:
@@ -12,7 +13,7 @@ class DataForSEO:
 
     async def _post_array(self, path: str, tasks: list[dict]):
         url = f"{self.base}{path}"
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=90) as client:
             r = await client.post(
                 url,
                 headers={
@@ -59,28 +60,20 @@ class DataForSEO:
         max_total: int = 200000,
         filters: Optional[list] = None,
     ) -> Tuple[List[dict], int]:
-        """
-        Повертає (усі_рядки_до_ліміту, оцінка_загальної_кількості_за_першою_відповіддю).
-        Крутиться по offset з кроком page_size.
-        """
+        """Повертає (всі_рядки_до_ліміту, оцінка_total)."""
         all_items: List[dict] = []
         total_estimate = 0
         offset = 0
 
         while True:
             resp = await self.backlinks_live(
-                target=target,
-                limit=page_size,
-                order_by=order_by,
-                filters=filters,
-                offset=offset,
+                target=target, limit=page_size, order_by=order_by, filters=filters, offset=offset
             )
             tasks = resp.get("tasks") or []
             if not tasks:
                 break
             t0 = tasks[0] or {}
             if t0.get("status_code") and t0["status_code"] != 20000:
-                # помилка задачі
                 raise RuntimeError(t0.get("status_message") or f"Task error: {t0.get('status_code')}")
             result = t0.get("result") or []
             if not result:
@@ -88,7 +81,6 @@ class DataForSEO:
             r0 = result[0]
             items = r0.get("items") or []
             if total_estimate == 0:
-                # пробуємо взяти total зі статистики (деякі ендпоїнти віддають total_count/available)
                 total_estimate = r0.get("total_count") or r0.get("available") or 0
 
             if not items:
@@ -100,7 +92,6 @@ class DataForSEO:
                 break
 
             if len(items) < page_size:
-                # остання сторінка
                 break
 
             offset += page_size
@@ -115,9 +106,6 @@ class DataForSEO:
         language_name: str = "Ukrainian",
         depth: int = 10,
     ):
-        """
-        Advanced SERP: топ-результати Google.
-        """
         task = {
             "keyword": keyword,
             "location_name": location_name,
@@ -126,26 +114,36 @@ class DataForSEO:
         }
         return await self._post_array("/v3/serp/google/organic/live/advanced", [task])
 
-    # ========= Keywords Data: ideas for keywords =========
-    async def keywords_for_keywords(
+    # ========= Keywords: ideas + volume =========
+    async def related_keywords(
         self,
         seed: str,
         location_name: str = "Ukraine",
         language_name: str = "Ukrainian",
         limit: int = 20,
     ):
-        """
-        Повертає синоніми/related з обсягом та CPC.
-        """
         task = {
             "keywords": [seed],
             "location_name": location_name,
             "language_name": language_name,
             "limit": limit,
         }
-        return await self._post_array("/v3/keywords_data/keywords_for_keywords/live", [task])
+        return await self._post_array("/v3/keywords_data/related_keywords/live", [task])
 
-    # ========= Labs: Keyword Gap (Keyword Intersections) =========
+    async def google_ads_search_volume(
+        self,
+        keywords: List[str],
+        location_name: str = "Ukraine",
+        language_name: str = "Ukrainian",
+    ):
+        task = {
+            "keywords": keywords,
+            "location_name": location_name,
+            "language_name": language_name,
+        }
+        return await self._post_array("/v3/keywords_data/google_ads/search_volume/live", [task])
+
+    # ========= Labs: Keyword Gap =========
     async def keywords_gap(
         self,
         target: str,
@@ -154,9 +152,6 @@ class DataForSEO:
         language_name: str = "Ukrainian",
         limit: int = 50,
     ):
-        """
-        Перетин/прогалини ключів: наш домен vs конкуренти.
-        """
         task = {
             "target": target,
             "competitors": competitors,
@@ -167,10 +162,7 @@ class DataForSEO:
         }
         return await self._post_array("/v3/dataforseo_labs/keyword_intersections/live", [task])
 
-    # ========= On-Page: instant audit =========
+    # ========= On-Page instant =========
     async def onpage_instant(self, url: str):
-        """
-        Швидкий технічний аудит однієї сторінки.
-        """
         task = {"url": url}
         return await self._post_array("/v3/on_page/instant_pages", [task])
