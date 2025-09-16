@@ -143,39 +143,24 @@ class DataForSEO:
         }
         return await self._post_array("/v3/keywords_data/google_ads/search_volume/live", [task])
 
-   # DataForSEO Labs: Domain Intersection (GAP)
-async def keywords_gap(
+    # ========= Labs: Keyword Gap =========
+    async def keywords_gap(
         self,
         target: str,
-        competitors: list[str],
+        competitors: List[str],
         location_name: str = "Ukraine",
         language_name: str = "Ukrainian",
         limit: int = 50,
     ):
-        """
-        GAP-аналіз через DataForSEO Labs: Google Domain Intersection (intersections=False).
-        Для кожного конкурента робимо окремий live-запит target1=competitor, target2=your domain.
-        """
-        target2 = self._clean_domain(target)
-        results = []
-
-        for comp in competitors:
-            target1 = self._clean_domain(comp)
-            task = {
-                "target1": target1,
-                "target2": target2,
-                "location_name": location_name,   # або використай location_code
-                "language_name": language_name,   # або language_code
-                "intersections": False,           # ← GAP
-                "limit": int(limit),
-            }
-            res = await self._post_array(
-                "/v3/dataforseo_labs/google/domain_intersection/live",
-                [task],
-            )
-            results.append({"competitor": target1, "data": res})
-
-        return results
+        task = {
+            "target": target,
+            "competitors": competitors,
+            "location_name": location_name,
+            "language_name": language_name,
+            "se_type": "google",
+            "limit": limit,
+        }
+        return await self._post_array("/v3/dataforseo_labs/keyword_intersections/live", [task])
 
     # ========= On-Page instant =========
     async def onpage_instant(self, url: str):
