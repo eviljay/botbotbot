@@ -144,23 +144,51 @@ class DataForSEO:
         return await self._post_array("/v3/keywords_data/google_ads/search_volume/live", [task])
 
     # ========= Labs: Keyword Gap =========
-    async def keywords_gap(
-        self,
-        target: str,
-        competitors: List[str],
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
-        limit: int = 50,
-    ):
-        task = {
-            "target": target,
-            "competitors": competitors,
+    # ========= Labs: Keyword Gap / Intersection =========
+async def keywords_gap(
+    self,
+    target: str,
+    competitors: list[str],
+    location_name: str = "Ukraine",
+    language_name: str = "Ukrainian",
+    limit: int = 50,
+    mode: str = "gap_from_competitors",  # "gap_from_competitors" | "gap_from_target" | "intersection"
+):
+    """
+    mode:
+      - "gap_from_competitors": показати КС, де КОНКУРЕНТ ранжується, а target — ні
+      - "gap_from_target":      показати КС, де target ранжується, а конкурент — ні
+      - "intersection":         показати перетини КС для обох доменів
+    """
+    path = "/v3/dataforseo_labs/google/domain_intersection/live"
+
+    tasks = []
+    for comp in competitors:
+        if mode == "intersection":
+            intersections = True
+            t1, t2 = target, comp
+        elif mode == "gap_from_target":
+            # Ключові слова, де target ранжується, а конкурент — ні
+            intersections = False
+            t1, t2 = target, comp
+        else:  # "gap_from_competitors"
+            # Ключові слова, де конкурент ранжується, а target — ні
+            # Для цього міняємо місцями: target1=competitor, target2=target + intersections=False
+            intersections = False
+            t1, t2 = comp, target
+
+        tasks.append({
+            "target1": t1,
+            "target2": t2,
             "location_name": location_name,
             "language_name": language_name,
-            "se_type": "google",
-            "limit": limit,
-        }
-        return await self._post_array("/v3/dataforseo_labs/keyword_intersections/live", [task])
+            "include_serp_info": False,  # за бажанням True
+            "intersections": intersections,
+            "limit": limit
+        })
+
+    return await self._post_array(path, tasks)
+
 
     # ========= On-Page instant =========
     async def onpage_instant(self, url: str):
