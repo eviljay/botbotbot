@@ -144,51 +144,155 @@ class DataForSEO:
         return await self._post_array("/v3/keywords_data/google_ads/search_volume/live", [task])
 
     # ========= Labs: Keyword Gap =========
-    # ========= Labs: Keyword Gap / Intersection =========
-async def keywords_gap(
-    self,
-    target: str,
-    competitors: list[str],
-    location_name: str = "Ukraine",
-    language_name: str = "Ukrainian",
-    limit: int = 50,
-    mode: str = "gap_from_competitors",  # "gap_from_competitors" | "gap_from_target" | "intersection"
-):
-    """
-    mode:
-      - "gap_from_competitors": показати КС, де КОНКУРЕНТ ранжується, а target — ні
-      - "gap_from_target":      показати КС, де target ранжується, а конкурент — ні
-      - "intersection":         показати перетини КС для обох доменів
-    """
-    path = "/v3/dataforseo_labs/google/domain_intersection/live"
-
-    tasks = []
-    for comp in competitors:
-        if mode == "intersection":
-            intersections = True
-            t1, t2 = target, comp
-        elif mode == "gap_from_target":
-            # Ключові слова, де target ранжується, а конкурент — ні
-            intersections = False
-            t1, t2 = target, comp
-        else:  # "gap_from_competitors"
-            # Ключові слова, де конкурент ранжується, а target — ні
-            # Для цього міняємо місцями: target1=competitor, target2=target + intersections=False
-            intersections = False
-            t1, t2 = comp, target
-
-        tasks.append({
-            "target1": t1,
-            "target2": t2,
+    async def keywords_gap(
+        self,
+        target: str,
+        competitors: List[str],
+        location_name: str = "Ukraine",
+        language_name: str = "Ukrainian",
+        limit: int = 50,
+    ):
+        task = {
+            "target": target,
+            "competitors": competitors,
             "location_name": location_name,
             "language_name": language_name,
-            "include_serp_info": False,  # за бажанням True
-            "intersections": intersections,
+            "se_type": "google",
+            "limit": limit,
+        }
+        return await self._post_array("/v3/dataforseo_labs/keyword_intersections/live", [task])
+    # ========= Labs: Domain Intersection (alias) =========
+    async def domain_intersection(
+        self,
+        target: str,
+        competitor: str,
+        location_name: str = "Ukraine",
+        language_name: str = "Ukrainian",
+        limit: int = 50,
+    ):
+        """
+        Returns keyword intersections between target and a single competitor.
+        Thin wrapper over /v3/dataforseo_labs/google/domain_intersection/live
+        """
+        path = "/v3/dataforseo_labs/google/domain_intersection/live"
+        tasks = [{
+            "target1": target,
+            "target2": competitor,
+            "location_name": location_name,
+            "language_name": language_name,
+            "include_serp_info": False,
+            "intersections": True,
             "limit": limit
-        })
+        }]
+        return await self._post_array(path, tasks)
 
-    return await self._post_array(path, tasks)
+    # ========= Labs: Keyword Gap / Intersection =========
+    async def keywords_gap(
+        self,
+        target: str,
+        competitors: list[str],
+        mode: str = "gap_from_competitors",  # "gap_from_competitors" | "gap_from_target" | "intersection"
+        location_name: str = "Ukraine",
+        language_name: str = "Ukrainian",
+        limit: int = 50,
+    ):
+        """
+        mode:
+          - "gap_from_competitors": показати КС, де конкурент ранжується, а target — ні
+          - "gap_from_target":      показати КС, де target ранжується, а конкурент — ні
+          - "intersection":         перетини КС для обох доменів
+        """
+        path = "/v3/dataforseo_labs/google/domain_intersection/live"
 
+        tasks = []
+        for comp in competitors:
+            if mode == "intersection":
+                intersections = True
+                t1, t2 = target, comp
+            elif mode == "gap_from_target":
+                intersections = False
+                t1, t2 = target, comp
+            else:  # "gap_from_competitors"
+                intersections = False
+                t1, t2 = comp, target  # інвертуємо, щоб дивитись прогалини від конкурента до нас
+
+            tasks.append({
+                "target1": t1,
+                "target2": t2,
+                "location_name": location_name,
+                "language_name": language_name,
+                "include_serp_info": False,
+                "intersections": intersections,
+                "limit": limit
+            })
+
+        return await self._post_array(path, tasks)
+    # ========= Labs: Domain Intersection (alias) =========
+    async def domain_intersection(
+        self,
+        target: str,
+        competitor: str,
+        location_name: str = "Ukraine",
+        language_name: str = "Ukrainian",
+        limit: int = 50,
+    ):
+        """
+        Returns keyword intersections between target and a single competitor.
+        Thin wrapper over /v3/dataforseo_labs/google/domain_intersection/live
+        """
+        path = "/v3/dataforseo_labs/google/domain_intersection/live"
+        tasks = [{
+            "target1": target,
+            "target2": competitor,
+            "location_name": location_name,
+            "language_name": language_name,
+            "include_serp_info": False,
+            "intersections": True,
+            "limit": limit
+        }]
+        return await self._post_array(path, tasks)
+
+    # ========= Labs: Keyword Gap / Intersection =========
+    async def keywords_gap(
+        self,
+        target: str,
+        competitors: list[str],
+        mode: str = "gap_from_competitors",  # "gap_from_competitors" | "gap_from_target" | "intersection"
+        location_name: str = "Ukraine",
+        language_name: str = "Ukrainian",
+        limit: int = 50,
+    ):
+        """
+        mode:
+          - "gap_from_competitors": показати КС, де конкурент ранжується, а target — ні
+          - "gap_from_target":      показати КС, де target ранжується, а конкурент — ні
+          - "intersection":         перетини КС для обох доменів
+        """
+        path = "/v3/dataforseo_labs/google/domain_intersection/live"
+
+        tasks = []
+        for comp in competitors:
+            if mode == "intersection":
+                intersections = True
+                t1, t2 = target, comp
+            elif mode == "gap_from_target":
+                intersections = False
+                t1, t2 = target, comp
+            else:  # "gap_from_competitors"
+                intersections = False
+                t1, t2 = comp, target  # інвертуємо, щоб дивитись прогалини від конкурента до нас
+
+            tasks.append({
+                "target1": t1,
+                "target2": t2,
+                "location_name": location_name,
+                "language_name": language_name,
+                "include_serp_info": False,
+                "intersections": intersections,
+                "limit": limit
+            })
+
+        return await self._post_array(path, tasks)
 
     # ========= On-Page instant =========
     async def onpage_instant(self, url: str):
