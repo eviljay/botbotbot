@@ -246,3 +246,4 @@ class DataForSEO:
         # формат для instant_pages згідно з документацією DataForSEO
         payload = {1: {"url": url}}
         return await self._post("/v3/on_page/instant_pages", payload)
+ 
