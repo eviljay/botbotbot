@@ -1,4 +1,3 @@
-# dataforseo.py
 import base64
 from typing import List, Tuple, Optional
 
@@ -26,6 +25,21 @@ class DataForSEO:
             r.raise_for_status()
             return r.json()
 
+    async def _post(self, path: str, payload):
+        url = f"{self.base}{path}"
+        async with httpx.AsyncClient(timeout=90) as client:
+            r = await client.post(
+                url,
+                headers={
+                    **self.auth,
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            r.raise_for_status()
+            return r.json()
+
     # ========= Backlinks =========
     async def backlinks_live(
         self,
@@ -35,16 +49,31 @@ class DataForSEO:
         filters: Optional[list] = None,
         offset: int = 0,
     ):
-        task = {"target": target, "limit": limit, "order_by": [order_by], "offset": offset}
+        task = {
+            "target": target,
+            "limit": limit,
+            "order_by": [order_by],
+            "offset": offset,
+        }
         if filters:
             task["filters"] = filters
         return await self._post_array("/v3/backlinks/backlinks/live", [task])
 
-    async def refdomains_live(self, target: str, limit: int = 50, order_by: str = "backlinks,desc"):
+    async def refdomains_live(
+        self,
+        target: str,
+        limit: int = 50,
+        order_by: str = "backlinks,desc",
+    ):
         task = {"target": target, "limit": limit, "order_by": [order_by]}
         return await self._post_array("/v3/backlinks/referring_domains/live", [task])
 
-    async def anchors_live(self, target: str, limit: int = 50, order_by: str = "backlinks,desc"):
+    async def anchors_live(
+        self,
+        target: str,
+        limit: int = 50,
+        order_by: str = "backlinks,desc",
+    ):
         task = {"target": target, "limit": limit, "order_by": [order_by]}
         return await self._post_array("/v3/backlinks/anchors/live", [task])
 
@@ -60,21 +89,26 @@ class DataForSEO:
         max_total: int = 200000,
         filters: Optional[list] = None,
     ) -> Tuple[List[dict], int]:
-        """Повертає (всі_рядки_до_ліміту, оцінка_total)."""
         all_items: List[dict] = []
         total_estimate = 0
         offset = 0
 
         while True:
             resp = await self.backlinks_live(
-                target=target, limit=page_size, order_by=order_by, filters=filters, offset=offset
+                target=target,
+                limit=page_size,
+                order_by=order_by,
+                filters=filters,
+                offset=offset,
             )
             tasks = resp.get("tasks") or []
             if not tasks:
                 break
             t0 = tasks[0] or {}
             if t0.get("status_code") and t0["status_code"] != 20000:
-                raise RuntimeError(t0.get("status_message") or f"Task error: {t0.get('status_code')}")
+                raise RuntimeError(
+                    t0.get("status_message") or f"Task error: {t0.get('status_code')}"
+                )
             result = t0.get("result") or []
             if not result:
                 break
@@ -130,6 +164,23 @@ class DataForSEO:
         }
         return await self._post_array("/v3/keywords_data/related_keywords/live", [task])
 
+    async def keywords_for_keywords(
+        self,
+        seed: str,
+        location_name: str = "Ukraine",
+        language_name: str = "Ukrainian",
+        limit: int = 50,
+    ):
+        task = {
+            "keywords": [seed],
+            "location_name": location_name,
+            "language_name": language_name,
+            "limit": limit,
+        }
+        return await self._post_array(
+            "/v3/keywords_data/google_ads/keywords_for_keywords/live", [task]
+        )
+
     async def google_ads_search_volume(
         self,
         keywords: List[str],
@@ -141,7 +192,9 @@ class DataForSEO:
             "location_name": location_name,
             "language_name": language_name,
         }
-        return await self._post_array("/v3/keywords_data/google_ads/search_volume/live", [task])
+        return await self._post_array(
+            "/v3/keywords_data/google_ads/search_volume/live", [task]
+        )
 
     # ========= Labs: Keyword Gap =========
     async def keywords_gap(
@@ -152,149 +205,44 @@ class DataForSEO:
         language_name: str = "Ukrainian",
         limit: int = 50,
     ):
+        tasks = []
+        for comp in competitors:
+            tasks.append(
+                {
+                    "target": target,
+                    "competitors": [comp],
+                    "location_name": location_name,
+                    "language_name": language_name,
+                    "limit": limit,
+                    "include_serp_info": False,
+                }
+            )
+        return await self._post_array(
+            "/v3/dataforseo_labs/keyword_intersections/live", tasks
+        )
+
+    # ========= Domain Intersection (опціонально) =========
+    async def domain_intersection(
+        self,
+        target: str,
+        competitor: str,
+        location_name: str = "Ukraine",
+        language_name: str = "Ukrainian",
+        limit: int = 50,
+    ):
         task = {
-            "target": target,
-            "competitors": competitors,
+            "target1": target,
+            "target2": competitor,
             "location_name": location_name,
             "language_name": language_name,
-            "se_type": "google",
             "limit": limit,
         }
-        return await self._post_array("/v3/dataforseo_labs/keyword_intersections/live", [task])
-    # ========= Labs: Domain Intersection (alias) =========
-    async def domain_intersection(
-        self,
-        target: str,
-        competitor: str,
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
-        limit: int = 50,
-    ):
-        """
-        Returns keyword intersections between target and a single competitor.
-        Thin wrapper over /v3/dataforseo_labs/google/domain_intersection/live
-        """
-        path = "/v3/dataforseo_labs/google/domain_intersection/live"
-        tasks = [{
-            "target1": target,
-            "target2": competitor,
-            "location_name": location_name,
-            "language_name": language_name,
-            "include_serp_info": False,
-            "intersections": True,
-            "limit": limit
-        }]
-        return await self._post_array(path, tasks)
-
-    # ========= Labs: Keyword Gap / Intersection =========
-    async def keywords_gap(
-        self,
-        target: str,
-        competitors: list[str],
-        mode: str = "gap_from_competitors",  # "gap_from_competitors" | "gap_from_target" | "intersection"
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
-        limit: int = 50,
-    ):
-        """
-        mode:
-          - "gap_from_competitors": показати КС, де конкурент ранжується, а target — ні
-          - "gap_from_target":      показати КС, де target ранжується, а конкурент — ні
-          - "intersection":         перетини КС для обох доменів
-        """
-        path = "/v3/dataforseo_labs/google/domain_intersection/live"
-
-        tasks = []
-        for comp in competitors:
-            if mode == "intersection":
-                intersections = True
-                t1, t2 = target, comp
-            elif mode == "gap_from_target":
-                intersections = False
-                t1, t2 = target, comp
-            else:  # "gap_from_competitors"
-                intersections = False
-                t1, t2 = comp, target  # інвертуємо, щоб дивитись прогалини від конкурента до нас
-
-            tasks.append({
-                "target1": t1,
-                "target2": t2,
-                "location_name": location_name,
-                "language_name": language_name,
-                "include_serp_info": False,
-                "intersections": intersections,
-                "limit": limit
-            })
-
-        return await self._post_array(path, tasks)
-    # ========= Labs: Domain Intersection (alias) =========
-    async def domain_intersection(
-        self,
-        target: str,
-        competitor: str,
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
-        limit: int = 50,
-    ):
-        """
-        Returns keyword intersections between target and a single competitor.
-        Thin wrapper over /v3/dataforseo_labs/google/domain_intersection/live
-        """
-        path = "/v3/dataforseo_labs/google/domain_intersection/live"
-        tasks = [{
-            "target1": target,
-            "target2": competitor,
-            "location_name": location_name,
-            "language_name": language_name,
-            "include_serp_info": False,
-            "intersections": True,
-            "limit": limit
-        }]
-        return await self._post_array(path, tasks)
-
-    # ========= Labs: Keyword Gap / Intersection =========
-    async def keywords_gap(
-        self,
-        target: str,
-        competitors: list[str],
-        mode: str = "gap_from_competitors",  # "gap_from_competitors" | "gap_from_target" | "intersection"
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
-        limit: int = 50,
-    ):
-        """
-        mode:
-          - "gap_from_competitors": показати КС, де конкурент ранжується, а target — ні
-          - "gap_from_target":      показати КС, де target ранжується, а конкурент — ні
-          - "intersection":         перетини КС для обох доменів
-        """
-        path = "/v3/dataforseo_labs/google/domain_intersection/live"
-
-        tasks = []
-        for comp in competitors:
-            if mode == "intersection":
-                intersections = True
-                t1, t2 = target, comp
-            elif mode == "gap_from_target":
-                intersections = False
-                t1, t2 = target, comp
-            else:  # "gap_from_competitors"
-                intersections = False
-                t1, t2 = comp, target  # інвертуємо, щоб дивитись прогалини від конкурента до нас
-
-            tasks.append({
-                "target1": t1,
-                "target2": t2,
-                "location_name": location_name,
-                "language_name": language_name,
-                "include_serp_info": False,
-                "intersections": intersections,
-                "limit": limit
-            })
-
-        return await self._post_array(path, tasks)
+        return await self._post_array(
+            "/v3/dataforseo_labs/google/domain_intersection/live", [task]
+        )
 
     # ========= On-Page instant =========
     async def onpage_instant(self, url: str):
-        task = {"url": url}
-        return await self._post_array("/v3/on_page/instant_pages", [task])
+        # формат для instant_pages згідно з документацією DataForSEO
+        payload = {1: {"url": url}}
+        return await self._post("/v3/on_page/instant_pages", payload)
