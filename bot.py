@@ -1021,11 +1021,11 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
         try:
-            # limit не відправляємо в DataForSEO, обрізаємо локально
             resp = await dfs.keywords_for_keywords(
                 kw,
                 location_name=country,
                 language_name=language,
+                limit=limit,  # API тепер ігнорує це поле, обрізання робимо в боті
             )
         except Exception as e:
             log.exception("KW ideas request failed")
@@ -1222,13 +1222,13 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
             r0 = result[0]
             items = r0.get("items") or []
             data_block = t.get("data") or {}
-            comp_list = data_block.get("competitors") or data_block.get("targets") or ["competitor"]
+            comp_list = data_block.get("competitors") or ["competitor"]
             comp_name = comp_list[0] if isinstance(comp_list, list) and comp_list else "competitor"
             for it in items:
                 kw = it.get("keyword") or it.get("keyword_text") or ""
                 vol = it.get("search_volume") or it.get("avg_monthly_searches") or ""
                 my_rank = it.get("target_rank") or it.get("rank") or ""
-                comp_ranks = it.get("competitor_ranks") or it.get("ranks") or {}
+                comp_ranks = it.get("competitor_ranks") or {}
                 rows.append((kw, vol, my_rank, comp_name, comp_ranks))
 
         if not rows:
@@ -1412,6 +1412,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     main,
                     location_name=country,
                     language_name=lang,
+                    limit=limit,
                 )
                 items = _extract_first_items(resp)
                 if not items:
@@ -1490,13 +1491,13 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     r0 = result[0]
                     items = r0.get("items") or []
                     data_block = t.get("data") or {}
-                    comp_list = data_block.get("competitors") or data_block.get("targets") or ["competitor"]
+                    comp_list = data_block.get("competitors") or ["competitor"]
                     comp_name = comp_list[0] if isinstance(comp_list, list) and comp_list else "competitor"
                     for it in items:
                         kw = it.get("keyword") or it.get("keyword_text") or ""
                         vol = it.get("search_volume") or it.get("avg_monthly_searches") or ""
                         my_rank = it.get("target_rank") or it.get("rank") or ""
-                        comp_ranks = it.get("competitor_ranks") or it.get("ranks") or {}
+                        comp_ranks = it.get("competitor_ranks") or {}
                         rows.append((kw, vol, my_rank, comp_name, comp_ranks))
 
                 if not rows:

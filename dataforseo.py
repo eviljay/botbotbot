@@ -1,297 +1,263 @@
-# dataforseo.py
 import base64
-from typing import List, Tuple, Optional
+import json
+import logging
+from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
+from httpx import AsyncClient, HTTPError
+
+log = logging.getLogger(__name__)
 
 
 class DataForSEO:
-    def __init__(self, login: str, password: str, base: str = "https://api.dataforseo.com"):
-        """
-        Простий клієнт для DataForSEO v3.
-        Використовує Basic Auth: login:password.
-        """
-        self.base = base.rstrip("/")
-        token = f"{login}:{password}".encode()
-        self.auth = {"Authorization": "Basic " + base64.b64encode(token).decode()}
+    """
+    Простий async-клієнт для DataForSEO.
+    Ми тримаємо тут лише ті методи, які реально використовуються ботом.
+    """
 
-    async def _post_array(self, path: str, tasks: List[dict]):
+    def __init__(self, login: str, password: str, base_url: str = "https://api.dataforseo.com"):
+        self.login = login
+        self.password = password
+        self.base_url = base_url.rstrip("/")
+        token = base64.b64encode(f"{login}:{password}".encode("utf-8")).decode("ascii")
+        self._auth_headers = {
+            "Authorization": f"Basic {token}",
+            "Content-Type": "application/json",
+        }
+
+    def _client(self) -> AsyncClient:
+        return AsyncClient(base_url=self.base_url, headers=self._auth_headers, timeout=30)
+
+    async def _post_array(self, path: str, tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Всі DataForSEO ендпоінти очікують масив задач.
+        Більшість endpoint-ів DataForSEO приймає список задач.
         """
-        url = f"{self.base}{path}"
-        async with httpx.AsyncClient(timeout=90) as client:
-            r = await client.post(
-                url,
-                headers={
-                    **self.auth,
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                },
-                json=tasks,
-            )
+        async with self._client() as client:
+            r = await client.post(path, json=tasks)
             r.raise_for_status()
             return r.json()
 
-    # ========= Backlinks =========
-
-    async def backlinks_live(
-        self,
-        target: str,
-        limit: int = 20,
-        order_by: str = "first_seen,desc",
-        filters: Optional[list] = None,
-        offset: int = 0,
-    ):
-        """
-        /v3/backlinks/backlinks/live
-        """
-        task: dict = {
-            "target": target,
-            "limit": limit,
-            "order_by": [order_by],
-            "offset": offset,
-        }
-        if filters:
-            task["filters"] = filters
-        return await self._post_array("/v3/backlinks/backlinks/live", [task])
-
-    async def refdomains_live(
-        self,
-        target: str,
-        limit: int = 50,
-        order_by: str = "backlinks,desc",
-    ):
-        """
-        /v3/backlinks/referring_domains/live
-        """
-        task = {
-            "target": target,
-            "limit": limit,
-            "order_by": [order_by],
-        }
-        return await self._post_array("/v3/backlinks/referring_domains/live", [task])
-
-    async def anchors_live(
-        self,
-        target: str,
-        limit: int = 50,
-        order_by: str = "backlinks,desc",
-    ):
-        """
-        /v3/backlinks/anchors/live
-        """
-        task = {
-            "target": target,
-            "limit": limit,
-            "order_by": [order_by],
-        }
-        return await self._post_array("/v3/backlinks/anchors/live", [task])
-
-    async def backlinks_summary(self, target: str):
-        """
-        /v3/backlinks/summary/live
-        """
-        task = {"target": target}
-        return await self._post_array("/v3/backlinks/summary/live", [task])
-
-    async def backlinks_all(
-        self,
-        target: str,
-        order_by: str = "first_seen,desc",
-        page_size: int = 1000,
-        max_total: int = 200000,
-        filters: Optional[list] = None,
-    ) -> Tuple[List[dict], int]:
-        """
-        Повна вибірка беклінків з пагінацією.
-        Повертає (всі_рядки_до_ліміту, оцінка_total).
-        """
-        all_items: List[dict] = []
-        total_estimate = 0
-        offset = 0
-
-        while True:
-            resp = await self.backlinks_live(
-                target=target,
-                limit=page_size,
-                order_by=order_by,
-                filters=filters,
-                offset=offset,
-            )
-            tasks = resp.get("tasks") or []
-            if not tasks:
-                break
-            t0 = tasks[0] or {}
-            if t0.get("status_code") and t0["status_code"] != 20000:
-                raise RuntimeError(t0.get("status_message") or f"Task error: {t0.get('status_code')}")
-
-            result = t0.get("result") or []
-            if not result:
-                break
-            r0 = result[0]
-            items = r0.get("items") or []
-
-            if total_estimate == 0:
-                total_estimate = r0.get("total_count") or r0.get("available") or 0
-
-            if not items:
-                break
-
-            all_items.extend(items)
-            if len(all_items) >= max_total:
-                all_items = all_items[:max_total]
-                break
-
-            if len(items) < page_size:
-                break
-
-            offset += page_size
-
-        if not total_estimate:
-            total_estimate = len(all_items)
-        return all_items, int(total_estimate)
-
-    # ========= SERP (Google Organic) =========
+    # ===== SERP =====
 
     async def serp_google_organic(
         self,
         keyword: str,
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
+        *,
+        location_name: str,
+        language_name: str,
         depth: int = 10,
-    ):
-        """
-        /v3/serp/google/organic/live/advanced
-        """
+    ) -> Dict[str, Any]:
         task = {
             "keyword": keyword,
             "location_name": location_name,
             "language_name": language_name,
             "depth": depth,
         }
-        return await self._post_array("/v3/serp/google/organic/live/advanced", [task])
+        return await self._post_array(
+            "/v3/serp/google/organic/live/advanced",
+            [task],
+        )
 
-    # ========= Keyword Ideas / Volume =========
+    # ===== BACKLINKS =====
+
+    async def backlinks_live(
+        self,
+        target: str,
+        *,
+        limit: int = 100,
+        order_by: str = "first_seen,desc",
+    ) -> Dict[str, Any]:
+        task = {
+            "target": target,
+            "mode": "as_is",
+            "order_by": order_by,
+            "limit": limit,
+        }
+        return await self._post_array(
+            "/v3/backlinks/backlinks/live",
+            [task],
+        )
+
+    async def backlinks_summary(self, target: str) -> Dict[str, Any]:
+        task = {
+            "target": target,
+            "mode": "as_is",
+        }
+        return await self._post_array(
+            "/v3/backlinks/summary/live",
+            [task],
+        )
+
+    async def refdomains_live(
+        self,
+        target: str,
+        *,
+        limit: int = 50,
+        order_by: str = "backlinks,desc",
+    ) -> Dict[str, Any]:
+        task = {
+            "target": target,
+            "mode": "as_is",
+            "order_by": order_by,
+            "limit": limit,
+        }
+        return await self._post_array(
+            "/v3/backlinks/referring_domains/live",
+            [task],
+        )
+
+    async def anchors_live(
+        self,
+        target: str,
+        *,
+        limit: int = 50,
+        order_by: str = "backlinks,desc",
+    ) -> Dict[str, Any]:
+        task = {
+            "target": target,
+            "mode": "as_is",
+            "order_by": order_by,
+            "limit": limit,
+        }
+        return await self._post_array(
+            "/v3/backlinks/anchors/live",
+            [task],
+        )
+
+    async def backlinks_all(
+        self,
+        target: str,
+        *,
+        order_by: str = "first_seen,desc",
+        page_size: int = 1000,
+        max_total: int = 200000,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        Пагінація по backlinks/live, поки не вичерпаємо все або max_total.
+        Повертає (items, total_found)
+        """
+        all_items: List[Dict[str, Any]] = []
+        offset = 0
+        total_found = 0
+
+        while True:
+            task = {
+                "target": target,
+                "mode": "as_is",
+                "order_by": order_by,
+                "limit": page_size,
+                "offset": offset,
+            }
+            resp = await self._post_array(
+                "/v3/backlinks/backlinks/live",
+                [task],
+            )
+            tasks = resp.get("tasks") or []
+            if not tasks:
+                break
+            res = tasks[0].get("result") or []
+            if not res:
+                break
+            r0 = res[0]
+            items = r0.get("items") or []
+            total_found = r0.get("total_count") or total_found
+            if not items:
+                break
+            all_items.extend(items)
+            offset += len(items)
+            if offset >= max_total:
+                break
+            if offset >= total_found:
+                break
+
+        return all_items, int(total_found or 0)
+
+    # ===== KEYWORDS (Google Ads) =====
 
     async def keywords_for_keywords(
         self,
-        seed: str,
+        keyword: str,
         location_name: str = "Ukraine",
         language_name: str = "Ukrainian",
-    ):
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
-        /v3/keywords_data/google_ads/keywords_for_keywords/live
-
-        ВАЖЛИВО:
-        Цей ендпоінт НЕ приймає поле 'limit', тому ми його не відправляємо.
-        Ліміт ріжемо вже в боті (по кількості items).
+        keywords_for_keywords НЕ підтримує поле `limit` у JSON.
+        Тому тут ми його не шлемо — обрізання робимо в боті.
         """
         task = {
-            "keywords": [seed],
-            "location_name": location_name,
-            "language_name": language_name,
-            # без "limit" – інакше: "Unknown Fields in POST Data: limit"
-        }
-        return await self._post_array("/v3/keywords_data/google_ads/keywords_for_keywords/live", [task])
-
-    async def google_ads_search_volume(
-        self,
-        keywords: List[str],
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
-    ):
-        """
-        /v3/keywords_data/google_ads/search_volume/live
-        """
-        task = {
-            "keywords": keywords,
+            "keywords": [keyword],
             "location_name": location_name,
             "language_name": language_name,
         }
-        return await self._post_array("/v3/keywords_data/google_ads/search_volume/live", [task])
+        return await self._post_array(
+            "/v3/keywords_data/google_ads/keywords_for_keywords/live",
+            [task],
+        )
 
-    # ========= GAP / Domain Intersection =========
-
-    async def domain_intersection(
+    async def related_keywords(
         self,
-        target1: str,
-        target2: str,
+        keyword: str,
         location_name: str = "Ukraine",
         language_name: str = "Ukrainian",
-        intersections: bool = True,
         limit: int = 50,
-    ):
-        """
-        /v3/dataforseo_labs/google/domain_intersection/live
-
-        intersections=True  -> перетин (обоє ранжуються)
-        intersections=False -> "gap" (target1 ранжується, target2 — ні)
-        """
+    ) -> Dict[str, Any]:
         task = {
-            "target1": target1,
-            "target2": target2,
+            "keywords": [keyword],
             "location_name": location_name,
             "language_name": language_name,
-            "intersections": intersections,
             "limit": limit,
         }
-        return await self._post_array("/v3/dataforseo_labs/google/domain_intersection/live", [task])
+        return await self._post_array(
+            "/v3/keywords_data/google_ads/related_keywords/live",
+            [task],
+        )
+
+    # ===== KEYWORD GAP (Labs: keyword_intersections) =====
 
     async def keywords_gap(
         self,
         target: str,
         competitors: List[str],
-        mode: str = "gap_from_competitors",  # "gap_from_competitors" | "gap_from_target" | "intersection"
         location_name: str = "Ukraine",
         language_name: str = "Ukrainian",
         limit: int = 50,
-    ):
+    ) -> Dict[str, Any]:
         """
-        Зручна обгортка над /v3/dataforseo_labs/google/domain_intersection/live.
+        Використовуємо dataforseo_labs keyword_intersections:
+        https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_intersections/live
 
-        mode:
-          - "gap_from_competitors": КС, де конкурент ранжується, а target — ні
-          - "gap_from_target":      КС, де target ранжується, а конкурент — ні
-          - "intersection":         спільні КС
+        Окрема задача для кожного конкурента — так у відповіді видно,
+        з ким саме порівнюємо.
         """
-        tasks: List[dict] = []
-
+        tasks: List[Dict[str, Any]] = []
         for comp in competitors:
-            if mode == "intersection":
-                # просто перетин
-                t1, t2 = target, comp
-                intersections = True
-            elif mode == "gap_from_target":
-                # target ранжується, конкурент — ні
-                t1, t2 = target, comp
-                intersections = False
-            else:
-                # "gap_from_competitors": конкурент ранжується, target — ні
-                t1, t2 = comp, target
-                intersections = False
-
             tasks.append(
                 {
-                    "target1": t1,
-                    "target2": t2,
+                    "target": target,
+                    "competitors": [comp],
                     "location_name": location_name,
                     "language_name": language_name,
-                    "intersections": intersections,
+                    "include_serp_info": False,
                     "limit": limit,
                 }
             )
+        return await self._post_array(
+            "/v3/dataforseo_labs/google/keyword_intersections/live",
+            tasks,
+        )
 
-        # тут вже точно правильний ендпоінт з полями target1/target2
-        return await self._post_array("/v3/dataforseo_labs/google/domain_intersection/live", tasks)
+    # ===== OnPage Instant =====
 
-    # ========= On-Page instant =========
-
-    async def onpage_instant(self, url: str):
+    async def onpage_instant(self, url: str) -> Dict[str, Any]:
         """
-        /v3/on_page/instant_pages
-
-        Туди передаємо поле "url".
+        Простий instant-парсинг однієї сторінки.
         """
-        task = {"url": url}
-        return await self._post_array("/v3/on_page/instant_pages", [task])
+        task = {
+            "id": url,
+            "url": url,
+            "pingback_url": "",
+        }
+        return await self._post_array(
+            "/v3/on_page/instant_pages",
+            [task],
+        )
