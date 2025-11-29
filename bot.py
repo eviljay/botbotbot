@@ -1793,7 +1793,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
                       # --- Backlinks Overview (one-line) ---
-                      if aw == "backlinks_ov":
+            if aw == "backlinks_ov":
                 target = main
 
                 summary = await dfs.backlinks_summary(target)
