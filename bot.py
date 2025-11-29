@@ -1297,8 +1297,47 @@ async def handle_site_kw_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             return
 
-        items_limited = items[:limit]
+                items_limited = items[:limit]
 
+        # ==========================
+        # 1) Підбір landing URL для кожного keyword'а
+        # ==========================
+
+        # готуємо список ключів (без дублікатів, у тому ж порядку)
+        kw_list: list[str] = []
+        for it in items_limited:
+            kw_i = it.get("keyword") or it.get("keyword_text")
+            if not kw_i:
+                continue
+            kw_i = str(kw_i).strip()
+            if kw_i and kw_i not in kw_list:
+                kw_list.append(kw_i)
+
+        # щоб не вбити API, обмежимо кількість keyword'ів для підбору landing
+        MAX_LANDING_LOOKUP = min(len(kw_list), 30)
+        kw_for_landing = kw_list[:MAX_LANDING_LOOKUP]
+
+        landing_map: dict[str, str | None] = {}
+
+        async def _one_landing(kw_str: str):
+            try:
+                url = await dfs.suggest_landing_url(
+                kw_str,
+                target=target,
+                location_code=location_code,
+                language_code=language_code,
+            )
+                landing_map[kw_str] = url
+            except Exception:
+                landing_map[kw_str] = None
+
+        # запускаємо в паралель
+        if kw_for_landing:
+            await asyncio.gather(*[_one_landing(k) for k in kw_for_landing])
+
+        # ==========================
+        # 2) Прев'ю
+        # ==========================
         lines = []
         for it in items_limited[:10]:
             kw_i = it.get("keyword") or it.get("keyword_text") or "—"
@@ -1309,19 +1348,28 @@ async def handle_site_kw_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
                 or "-"
             )
             cpc = it.get("cpc") or it.get("cost_per_click") or "-"
-            lines.append(f"• {kw_i} — vol: {vol}, CPC: {cpc}")
+            landing = landing_map.get(str(kw_i).strip()) or "—"
+            lines.append(f"• {kw_i} — vol: {vol}, CPC: {cpc}\n  ↳ сторінка: {landing}")
         preview = "🌐 *Ключі для сайту*\n" + "\n".join(lines)
 
+        # ==========================
+        # 3) CSV-експорт
+        # ==========================
         buf = io.StringIO()
         w = csv.writer(buf)
-        w.writerow(["keyword", "search_volume", "cpc"])
+        w.writerow(["keyword", "search_volume", "cpc", "landing_url"])
         for it in items_limited:
+            kw_i = it.get("keyword") or it.get("keyword_text") or ""
+            kw_norm = str(kw_i).strip()
+            landing = landing_map.get(kw_norm) or ""
             w.writerow([
-                it.get("keyword") or it.get("keyword_text") or "",
+                kw_norm,
                 it.get("search_volume") or it.get("avg_monthly_searches") or it.get("search_volume_avg") or "",
                 it.get("cpc") or it.get("cost_per_click") or "",
+                landing,
             ])
         csv_bytes = buf.getvalue().encode()
+
 
         bal_now = get_balance(uid)
         await update.message.reply_text(
