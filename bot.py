@@ -1004,7 +1004,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    # keyword
+    # крок 1: keyword
     if state == "keyword":
         kw = text.strip()
         if not kw:
@@ -1019,7 +1019,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    # country
+    # крок 2: country
     if state == "country":
         if text not in SERP_LOCATIONS:
             await update.message.reply_text(
@@ -1036,7 +1036,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    # language
+    # крок 3: language
     if state == "language":
         if text not in SERP_LANGUAGES:
             await update.message.reply_text(
@@ -1056,7 +1056,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    # limit + запуск
+    # крок 4: limit + запуск
     if state == "limit":
         try:
             limit = int(text)
@@ -1073,6 +1073,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         location_code = LOCATION_CODES.get(country_name, 2840)
         language_code = LANGUAGE_CODES.get(language_name, "en")
 
+        # гасимо стейт
         context.user_data.pop("kwideas_state", None)
         context.user_data.pop("kwideas", None)
 
@@ -1096,7 +1097,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=ReplyKeyboardRemove(),
         )
 
-              try:
+        try:
             resp = await dfs.keywords_for_keywords(
                 kw,
                 location_code=location_code,
@@ -1107,9 +1108,9 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"Помилка від DataForSEO: {e}")
             return
 
-        # ===== нова логіка: шукаємо keywords будь-де в JSON і фільтруємо =====
+        # дістаємо items та фільтруємо
         items_all = find_keyword_items(resp)
-        items = filter_keywords(items_all, min_search_volume=1)  # тільки search_volume > 0
+        items = filter_keywords(items_all, min_search_volume=1)  # тільки з search_volume > 0
 
         if not items:
             bal_now = get_balance(uid)
@@ -1121,7 +1122,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         items_limited = items[:limit]
 
-
+        # прев'ю в чат
         lines = []
         for it in items_limited[:10]:
             kw_i = it.get("keyword") or it.get("keyword_text") or "—"
@@ -1135,6 +1136,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
             lines.append(f"• {kw_i} — vol: {vol}, CPC: {cpc}")
         preview = "🧠 *Ідеї ключових*\n" + "\n".join(lines)
 
+        # CSV
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(["keyword", "search_volume", "cpc"])
@@ -1157,6 +1159,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
             caption="CSV з ідеями ключових",
         )
         return
+
 
 
 async def start_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
