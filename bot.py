@@ -1,4 +1,3 @@
-
 import os
 import io
 import re
@@ -64,7 +63,7 @@ def _parse_int_env(name: str, default: int) -> int:
 def _parse_int_list_env(name: str, fallback: str = "100,250,500") -> List[int]:
     raw = os.getenv(name, fallback)
     nums = re.findall(r"\d+", raw)
-    res = []
+    res: List[int] = []
     for n in nums:
         try:
             v = int(n)
@@ -195,8 +194,8 @@ LANGUAGE_CODES = {
 
 
 def countries_keyboard() -> ReplyKeyboardMarkup:
-    rows = []
-    row: list[KeyboardButton] = []
+    rows: List[List[KeyboardButton]] = []
+    row: List[KeyboardButton] = []
     for i, name in enumerate(SERP_LOCATIONS, start=1):
         row.append(KeyboardButton(name))
         if i % 3 == 0:
@@ -208,8 +207,8 @@ def countries_keyboard() -> ReplyKeyboardMarkup:
 
 
 def languages_keyboard() -> ReplyKeyboardMarkup:
-    rows = []
-    row: list[KeyboardButton] = []
+    rows: List[List[KeyboardButton]] = []
+    row: List[KeyboardButton] = []
     for i, name in enumerate(SERP_LANGUAGES, start=1):
         row.append(KeyboardButton(name))
         if i % 3 == 0:
@@ -280,7 +279,8 @@ def _extract_first_items(resp: dict) -> List[dict]:
     res = t.get("result") or []
     if not res:
         return []
-    return res[0].get("items") or []
+    r0 = res[0] or {}
+    return r0.get("items") or []
 
 
 def _extract_result(resp: dict) -> dict:
@@ -317,7 +317,7 @@ def _topup_cta() -> InlineKeyboardMarkup:
 def _parse_opts(line: str) -> Tuple[str, dict]:
     parts = [p.strip() for p in line.split("|")]
     main = parts[0] if parts else ""
-    opts = {}
+    opts: dict = {}
     for p in parts[1:]:
         m = re.match(r"([a-zA-Z_]+)\s*=\s*(.+)", p)
         if m:
@@ -336,27 +336,21 @@ def _write_backlink_rows(writer: csv.writer, items: List[dict]):
             it.get("last_visited"),
             it.get("domain_from"),
         ])
+
+
 def find_keyword_items(node):
     """
     Рекурсивно шукає перший список dict'ів, у яких є ключ 'keyword' або 'keyword_text'.
-    Працює з будь-якою вкладеністю (як у debug-скрипті).
+    Працює з будь-якою вкладеністю.
     """
-    # Якщо це список
     if isinstance(node, list):
-        # Якщо це список об’єктів з 'keyword'/'keyword_text' – це те, що нам треба
-        if node and all(
-            isinstance(x, dict) and ("keyword" in x or "keyword_text" in x)
-            for x in node
-        ):
+        if node and all(isinstance(x, dict) and ("keyword" in x or "keyword_text" in x) for x in node):
             return node
-
-        # Інакше обходимо всіх дітей
         for x in node:
             found = find_keyword_items(x)
             if found:
                 return found
 
-    # Якщо це dict – обходимо значення
     elif isinstance(node, dict):
         for v in node.values():
             found = find_keyword_items(v)
@@ -364,7 +358,6 @@ def find_keyword_items(node):
                 return found
 
     return []
-
 
 
 def filter_keywords(items, min_search_volume: int = 1):
@@ -616,8 +609,6 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- Сервіси (вхід у wizard або діалогові флоу) ---
     if cmd == "svc":
         tool = parts[1] if len(parts) > 1 else ""
-        # SERP / Keywords / Gap мають окремий діалоговий флоу через нижні кнопки,
-        # тут залишаємо only one-line режим для Backlinks/Audit
         if tool in ("backlinks_ov", "audit"):
             context.user_data["await_tool"] = tool
             prompts = {
@@ -631,7 +622,6 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
             )
         else:
-            # Підказка: користувач може натиснути нижню кнопку «🔍 SERP» / «🧠 Keyword Ideas» / «⚔️ Gap»
             txt = (
                 "Для цього інструменту краще скористайтесь нижніми кнопками меню:\n"
                 "🔍 SERP / 🧠 Keyword Ideas / ⚔️ Gap.\n\n"
@@ -897,7 +887,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         context.user_data["serp_params"] = params
         context.user_data["serp_state"] = "depth"
         await update.message.reply_text(
-            "Глибина SERP: обери 10, 20 або 30.",
+            "Глибина SERP: обери 10, 20 або 30 (або 100):",
             reply_markup=ReplyKeyboardMarkup(
                 [[KeyboardButton("10"), KeyboardButton("20"), KeyboardButton("30"), KeyboardButton("100")]],
                 resize_keyboard=True,
@@ -910,10 +900,10 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         try:
             depth = int(text)
         except ValueError:
-            await update.message.reply_text("Напиши 10, 20 або 30 або 100 як глибину:")
+            await update.message.reply_text("Напиши 10, 20, 30 або 100 як глибину:")
             return
         if depth not in (10, 20, 30, 100):
-            await update.message.reply_text("Підтримуються значення 10, 20 або 30 або 100.")
+            await update.message.reply_text("Підтримуються значення 10, 20, 30 або 100.")
             return
 
         keyword = (params.get("keyword") or "").strip()
@@ -1088,7 +1078,6 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         location_code = LOCATION_CODES.get(country_name, 2840)
         language_code = LANGUAGE_CODES.get(language_name, "en")
 
-        # гасимо стейт
         context.user_data.pop("kwideas_state", None)
         context.user_data.pop("kwideas", None)
 
@@ -1123,9 +1112,8 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"Помилка від DataForSEO: {e}")
             return
 
-        # дістаємо items та фільтруємо
         items_all = find_keyword_items(resp)
-        items = filter_keywords(items_all, min_search_volume=1)  # тільки з search_volume > 0
+        items = filter_keywords(items_all, min_search_volume=1)
 
         if not items:
             bal_now = get_balance(uid)
@@ -1137,7 +1125,6 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         items_limited = items[:limit]
 
-        # прев'ю в чат
         lines = []
         for it in items_limited[:10]:
             kw_i = it.get("keyword") or it.get("keyword_text") or "—"
@@ -1151,7 +1138,6 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
             lines.append(f"• {kw_i} — vol: {vol}, CPC: {cpc}")
         preview = "🧠 *Ідеї ключових*\n" + "\n".join(lines)
 
-        # CSV
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(["keyword", "search_volume", "cpc"])
@@ -1174,7 +1160,6 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
             caption="CSV з ідеями ключових",
         )
         return
-
 
 
 async def start_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1324,7 +1309,6 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
             items = r0.get("items") or []
             data_block = t.get("data") or {}
 
-            # для кожного таска target2 = конкретний конкурент
             comp_name = data_block.get("target2") or "competitor"
 
             for it in items:
@@ -1353,7 +1337,6 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
                 )
 
                 rows.append((kw, vol, my_rank, comp_name, comp_rank))
-
 
         if not rows:
             bal_now = get_balance(uid)
@@ -1642,7 +1625,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                         rows.append((kw, vol, my_rank, comp_name, comp_rank))
 
-
                 if not rows:
                     bal_now = get_balance(uid)
                     return await update.message.reply_text(
@@ -1802,8 +1784,7 @@ def _render_users_page(page: int) -> str:
     if total == 0:
         return "Користувачів ще немає."
 
-    import math as _math
-    lines = [f"👤 Користувачі (всього: {total}) | сторінка {page}/{max(1, _math.ceil(total / PAGE_SIZE))}"]
+    lines = [f"👤 Користувачі (всього: {total}) | сторінка {page}/{max(1, math.ceil(total / PAGE_SIZE))}"]
     for uid, bal, phone in rows:
         phone_disp = phone if phone else "—"
         lines.append(f"• {uid}: баланс {bal}, телефон {phone_disp}")
@@ -1811,7 +1792,9 @@ def _render_users_page(page: int) -> str:
 
 
 def _admin_kb(page: int) -> InlineKeyboardMarkup:
-    buttons = [InlineKeyboardButton("⬅️ Назад", callback_data=f"admin|page|{page-1}")] if page > 1 else []
+    buttons: List[InlineKeyboardButton] = []
+    if page > 1:
+        buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"admin|page|{page-1}"))
     buttons += [
         InlineKeyboardButton("↻ Оновити", callback_data=f"admin|page|{page}"),
         InlineKeyboardButton("Вперед ➡️", callback_data=f"admin|page|{page+1}")
