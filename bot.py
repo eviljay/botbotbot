@@ -812,7 +812,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.message.reply_text(
             "Глибина SERP: обери 10, 20 або 30.",
             reply_markup=ReplyKeyboardMarkup(
-                [[KeyboardButton("10"), KeyboardButton("20"), KeyboardButton("30")]],
+                [[KeyboardButton("10"), KeyboardButton("20"), KeyboardButton("30"), KeyboardButton("100")]],
                 resize_keyboard=True,
             ),
         )
@@ -823,10 +823,10 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         try:
             depth = int(text)
         except ValueError:
-            await update.message.reply_text("Напиши 10, 20 або 30 як глибину:")
+            await update.message.reply_text("Напиши 10, 20 або 30 або 100 як глибину:")
             return
-        if depth not in (10, 20, 30):
-            await update.message.reply_text("Підтримуються значення 10, 20 або 30.")
+        if depth not in (10, 20, 30,100):
+            await update.message.reply_text("Підтримуються значення 10, 20 або 30 або 100.")
             return
 
         keyword = (params.get("keyword") or "").strip()
