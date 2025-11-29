@@ -1,52 +1,81 @@
-import base64
-import json
-from httpx import AsyncClient
-
-
+ 
 LOGIN = "info@seoswiss.online"
 PASSWORD = "d752edcc5e5dbd73"
 
+#!/usr/bin/env python3
+import base64
+import json
+import sys
+import asyncio
+from typing import Any, Dict, List
 
-async def debug_keywords_for_keywords(keyword: str, location: int, language: str):
-    auth = f"{LOGIN}:{PASSWORD}".encode("utf-8")
-    headers = {
-        "Authorization": "Basic " + base64.b64encode(auth).decode(),
-        "Content-Type": "application/json"
-    }
-
-    payload = [{
-        "keywords": [keyword],
-        "location_code": location,
-        "language_code": language,
-        "sort_by": "relevance",
-    }]
-print("RAW DATAFORSEO:\n", json.dumps(res, ensure_ascii=False, indent=2))
-
-    url = "https://api.dataforseo.com/v3/keywords_data/google_ads/keywords_for_keywords/live"
-
-    async with AsyncClient(timeout=30) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-
-        # Виводимо ВСЕ у консоль красиво
-        print("\n================ RAW DATAFORSEO RESPONSE ================\n")
-        print(json.dumps(data, ensure_ascii=False, indent=2))
-        print("\n==========================================================\n")
-
-        return data
+from httpx import AsyncClient, HTTPStatusError
 
 
-# ---------------- MAIN ----------------
+# =================== НАЛАШТУВАННЯ ===================
 
-if __name__ == "__main__":
-    import asyncio
-    print("Запит до DataForSEO...\n")
+# ⚠️ СЮДИ ВСТАВ API LOGIN / API PASSWORD Зі СТОРІНКИ:
+# https://app.dataforseo.com/api/access
+API_LOGIN = "info@seoswiss.online"
+API_PASSWORD = "d752edcc5e5dbd73"
 
-    asyncio.run(
-        debug_keywords_for_keywords(
-            keyword="casino online",
-            location=2036,
-            language="en"
-        )
-    )
+BASE_URL = "https://api.dataforseo.com"
+
+
+# =================== ХЕЛПЕРИ ===================
+
+def extract_kfk_items(resp: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Акуратно дістає список keyword-ів із відповіді keywords_for_keywords.
+
+    Підтримує два формати:
+    1) Класичний (як у playground):
+       {
+         "status_code": 20000,
+         "result_count": 2,
+         "result": [ {...}, {...} ]
+       }
+
+    2) Потенційний формат з tasks (на майбутнє):
+       {
+         "tasks": [
+           {
+             "result": [
+               {
+                 "items": [ {...}, {...} ]
+               }
+             ]
+           }
+         ]
+       }
+    """
+    if not isinstance(resp, dict):
+        return []
+
+    # 1) Формат як у playground
+    if "result" in resp and isinstance(resp["result"], list):
+        return resp["result"]
+
+    # 2) Формат із tasks/items
+    tasks = resp.get("tasks") or []
+    if not tasks:
+        return []
+
+    t0 = tasks[0] or {}
+    result_list = t0.get("result") or []
+    if not result_list:
+        return []
+
+    first_result = result_list[0] or {}
+    items = first_result.get("items") or []
+    return items
+
+
+async def debug_keywords_for_keywords(
+    keyword: str,
+    location_code: int,
+    language_code: str,
+    sort_by: str = "relevance",
+) -> Dict[str, Any]:
+    """
+    Робить запит до /v3/keywords
