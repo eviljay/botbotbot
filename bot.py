@@ -142,7 +142,6 @@ SERP_LOCATIONS = [
 
 SERP_LANGUAGES = [
     "Ukrainian",
-    "Russian",
     "Polish",
     "German",
     "Swedish",
@@ -178,7 +177,6 @@ LOCATION_CODES = {
 
 LANGUAGE_CODES = {
     "Ukrainian": "uk",
-    "Russian": "ru",
     "Polish": "pl",
     "German": "de",
     "Swedish": "sv",
