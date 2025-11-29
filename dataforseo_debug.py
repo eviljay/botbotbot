@@ -1,8 +1,3 @@
- 
-LOGIN = "info@seoswiss.online"
-PASSWORD = "d752edcc5e5dbd73"
-
-#!/usr/bin/env python3
 import base64
 import json
 import sys
