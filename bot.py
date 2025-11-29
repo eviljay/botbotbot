@@ -1811,7 +1811,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     b = it.get("backlinks") or "-"
                     rd_lines.append(f"• {d} — {b} backlinks")
 
-                rdom = await dfs.refdomains_live(target, limit=10)
+                anch = await dfs.refdomains_live(target, limit=10)
                 a_items = _extract_first_items(anch)
                 a_lines = []
                 for it in a_items[:10]:
