@@ -1,76 +1,84 @@
 import base64
 import json
-import sys
 import asyncio
-from typing import Any, Dict, List
-
 from httpx import AsyncClient, HTTPStatusError
 
-
-# =================== НАЛАШТУВАННЯ ===================
-
-# ⚠️ СЮДИ ВСТАВ API LOGIN / API PASSWORD Зі СТОРІНКИ:
+# =======================================================
+# ВСТАВ API LOGIN / PASSWORD:
 # https://app.dataforseo.com/api/access
+# =======================================================
+
 API_LOGIN = "info@seoswiss.online"
 API_PASSWORD = "d752edcc5e5dbd73"
 
 BASE_URL = "https://api.dataforseo.com"
 
 
-# =================== ХЕЛПЕРИ ===================
+async def debug_keywords_for_keywords(keyword: str, location_code: int, language_code: str):
+    auth_bytes = f"{API_LOGIN}:{API_PASSWORD}".encode("utf-8")
 
-def extract_kfk_items(resp: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Акуратно дістає список keyword-ів із відповіді keywords_for_keywords.
+    headers = {
+        "Authorization": "Basic " + base64.b64encode(auth_bytes).decode("utf-8"),
+        "Content-Type": "application/json",
+    }
 
-    Підтримує два формати:
-    1) Класичний (як у playground):
-       {
-         "status_code": 20000,
-         "result_count": 2,
-         "result": [ {...}, {...} ]
-       }
+    payload = [{
+        "keywords": [keyword],
+        "location_code": location_code,
+        "language_code": language_code,
+        "sort_by": "relevance"
+    }]
 
-    2) Потенційний формат з tasks (на майбутнє):
-       {
-         "tasks": [
-           {
-             "result": [
-               {
-                 "items": [ {...}, {...} ]
-               }
-             ]
-           }
-         ]
-       }
-    """
-    if not isinstance(resp, dict):
-        return []
+    url = f"{BASE_URL}/v3/keywords_data/google_ads/keywords_for_keywords/live"
 
-    # 1) Формат як у playground
-    if "result" in resp and isinstance(resp["result"], list):
-        return resp["result"]
+    async with AsyncClient(timeout=30) as client:
+        try:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+        except HTTPStatusError as e:
+            print("❌ HTTP Error:")
+            print(f"Status: {e.response.status_code}")
+            print("Body:", e.response.text)
+            return
 
-    # 2) Формат із tasks/items
-    tasks = resp.get("tasks") or []
-    if not tasks:
-        return []
+        data = response.json()
 
-    t0 = tasks[0] or {}
-    result_list = t0.get("result") or []
-    if not result_list:
-        return []
+        # RAW JSON
+        print("\n================ RAW DATAFORSEO RESPONSE ================\n")
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        print("\n==========================================================\n")
 
-    first_result = result_list[0] or {}
-    items = first_result.get("items") or []
-    return items
+        # Parsed
+        if "result" in data:
+            items = data["result"]
+        else:
+            items = []
+
+        print("============== PARSED KEYWORDS ==================\n")
+
+        if not items:
+            print("⚠️ No items found.")
+            return
+
+        for i, item in enumerate(items, start=1):
+            print(f"{i}. {item.get('keyword')}")
+            print(f"   Search volume: {item.get('search_volume')}")
+            print(f"   Competition: {item.get('competition')} ({item.get('competition_index')})")
+            print(f"   CPC: {item.get('cpc')}")
+            print("")
+
+        print("==========================================================\n")
 
 
-async def debug_keywords_for_keywords(
-    keyword: str,
-    location_code: int,
-    language_code: str,
-    sort_by: str = "relevance",
-) -> Dict[str, Any]:
-    """
-    Робить запит до /v3/keywords
+# ====================== MAIN ======================
+
+if __name__ == "__main__":
+    print("Запит до DataForSEO...\n")
+
+    asyncio.run(
+        debug_keywords_for_keywords(
+            keyword="casino online",
+            location_code=2036,
+            language_code="en"
+        )
+    )
