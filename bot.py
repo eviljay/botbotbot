@@ -1793,18 +1793,29 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
                       # --- Backlinks Overview (one-line) ---
+             # --- Backlinks Overview (one-line) ---
             if aw == "backlinks_ov":
                 target = main
 
+                # 1) Summary
                 summary = await dfs.backlinks_summary(target)
                 s = _extract_result(summary)
 
                 totals = s.get("totals") or {}
-                backlinks = totals.get("backlinks") or s.get("backlinks") or "-"
-                refdomains = totals.get("referring_domains") or s.get("referring_domains") or "-"
-                dofollow = totals.get("dofollow") or s.get("dofollow") or "-"
-                nofollow = totals.get("nofollow") or s.get("nofollow") or "-"
+                backlinks_total = totals.get("backlinks") or s.get("backlinks") or "-"
+                refdomains_total = totals.get("referring_domains") or s.get("referring_domains") or "-"
+                dofollow_total = totals.get("dofollow") or s.get("dofollow") or "-"
+                nofollow_total = totals.get("nofollow") or s.get("nofollow") or "-"
 
+                # 2) Детальні backlinks (як у твоєму JSON-прикладі)
+                bl_resp = await dfs.backlinks_live(target, limit=100)
+                bl_items = _extract_first_items(bl_resp)
+
+                # Порахувати dofollow / nofollow у цьому зрізі (top 100)
+                dof_sample = sum(1 for it in bl_items if it.get("dofollow") is True)
+                nof_sample = sum(1 for it in bl_items if it.get("dofollow") is False)
+
+                # 3) Топ referring domains
                 rdom = await dfs.refdomains_live(target, limit=20)
                 r_items = _extract_first_items(rdom)
                 rd_lines = []
@@ -1813,72 +1824,117 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     b = it.get("backlinks") or "-"
                     rd_lines.append(f"• {escape(str(d))} — {escape(str(b))} backlinks")
 
-                anch = await dfs.anchors_live(target, limit=50)
-                a_items = _extract_first_items(anch)
+                # 4) Топ anchors
+                anch_resp = await dfs.anchors_live(target, limit=50)
+                a_items = _extract_first_items(anch_resp)
                 a_lines = []
                 for it in a_items[:10]:
                     a = it.get("anchor") or "-"
                     b = it.get("backlinks") or "-"
                     a_lines.append(f"• {escape(str(a))[:60]} — {escape(str(b))}")
 
-                # CSV як ми вже зробили – без змін
+                # 5) CSV з "повною" інфою по backlinks/live
                 buf = io.StringIO()
                 w = csv.writer(buf)
-                w.writerow(["section", "metric", "value"])
-                w.writerow(["summary", "backlinks", backlinks])
-                w.writerow(["summary", "referring_domains", refdomains])
-                w.writerow(["summary", "dofollow", dofollow])
-                w.writerow(["summary", "nofollow", nofollow])
-                w.writerow([])
 
-                w.writerow(["Top referring domains"])
-                w.writerow(["domain", "backlinks", "dofollow", "nofollow", "first_seen", "last_visited"])
-                for it in r_items:
-                    w.writerow([
-                        it.get("domain") or it.get("referring_domain") or "",
-                        it.get("backlinks") or "",
-                        it.get("dofollow") or "",
-                        it.get("nofollow") or "",
-                        it.get("first_seen") or "",
-                        it.get("last_visited") or "",
-                    ])
-                w.writerow([])
+                # Шапка CSV — основні поля з прикладу
+                w.writerow([
+                    "domain_from",
+                    "url_from",
+                    "url_to",
+                    "dofollow",
+                    "backlink_spam_score",
+                    "rank",
+                    "page_from_rank",
+                    "domain_from_rank",
+                    "page_from_status_code",
+                    "url_to_status_code",
+                    "is_new",
+                    "is_lost",
+                    "is_broken",
+                    "first_seen",
+                    "prev_seen",
+                    "last_seen",
+                    "anchor",
+                    "text_pre",
+                    "text_post",
+                    "item_type",
+                    "links_count",
+                    "group_count",
+                    "domain_from_ip",
+                    "domain_from_country",
+                    "page_from_external_links",
+                    "page_from_internal_links",
+                    "page_from_size",
+                    "page_from_language",
+                    "page_from_title",
+                    "url_to_spam_score",
+                    "is_indirect_link",
+                    "indirect_link_path",
+                ])
 
-                w.writerow(["Top anchors"])
-                w.writerow(["anchor", "backlinks", "dofollow", "nofollow", "first_seen", "last_visited"])
-                for it in a_items:
+                for it in bl_items:
                     w.writerow([
-                        it.get("anchor") or "",
-                        it.get("backlinks") or "",
-                        it.get("dofollow") or "",
-                        it.get("nofollow") or "",
+                        it.get("domain_from") or "",
+                        it.get("url_from") or "",
+                        it.get("url_to") or "",
+                        it.get("dofollow"),
+                        it.get("backlink_spam_score") or "",
+                        it.get("rank") or "",
+                        it.get("page_from_rank") or "",
+                        it.get("domain_from_rank") or "",
+                        it.get("page_from_status_code") or "",
+                        it.get("url_to_status_code") or "",
+                        it.get("is_new"),
+                        it.get("is_lost"),
+                        it.get("is_broken"),
                         it.get("first_seen") or "",
-                        it.get("last_visited") or "",
+                        it.get("prev_seen") or "",
+                        it.get("last_seen") or "",
+                        (it.get("anchor") or "")[:255],
+                        (it.get("text_pre") or "")[:255],
+                        (it.get("text_post") or "")[:255],
+                        it.get("item_type") or "",
+                        it.get("links_count") or "",
+                        it.get("group_count") or "",
+                        it.get("domain_from_ip") or "",
+                        it.get("domain_from_country") or "",
+                        it.get("page_from_external_links") or "",
+                        it.get("page_from_internal_links") or "",
+                        it.get("page_from_size") or "",
+                        it.get("page_from_language") or "",
+                        it.get("page_from_title") or "",
+                        it.get("url_to_spam_score") or "",
+                        it.get("is_indirect_link"),
+                        it.get("indirect_link_path") or "",
                     ])
 
                 csv_bytes = buf.getvalue().encode()
 
                 bal_now = get_balance(uid)
                 target_safe = escape(target)
+
                 txt = (
                     f"🔗 <b>Backlinks огляд для</b> <b>{target_safe}</b>\n"
-                    f"• Backlinks: {escape(str(backlinks))}\n"
-                    f"• Referring domains: {escape(str(refdomains))}\n"
-                    f"• Dofollow: {escape(str(dofollow))} | Nofollow: {escape(str(nofollow))}\n\n"
-                    f"Топ реф.доменів:\n" + ("\n".join(rd_lines) or "—") + "\n\n"
-                    f"Топ анкорів:\n" + ("\n".join(a_lines) or "—") +
+                    f"• Backlinks (всього): {escape(str(backlinks_total))}\n"
+                    f"• Referring domains: {escape(str(refdomains_total))}\n"
+                    f"• Dofollow (total): {escape(str(dofollow_total))} | "
+                    f"Nofollow (total): {escape(str(nofollow_total))}\n"
+                    f"• У топ {len(bl_items)} посилань: dofollow {dof_sample}, nofollow {nof_sample}\n\n"
+                    f"Топ реф.доменів:\n" + ("\n".join(rd_lines) if rd_lines else "—") + "\n\n"
+                    f"Топ анкорів:\n" + ("\n".join(a_lines) if a_lines else "—") +
                     f"\n\n💰 Списано {escape(str(need_credits))}. Баланс: {escape(str(bal_now))}"
                 )
 
                 await update.message.reply_text(
                     txt,
-                    parse_mode="HTML",          # тепер HTML
+                    parse_mode="HTML",
                     reply_markup=services_menu_keyboard()
                 )
 
                 await update.message.reply_document(
-                    document=InputFile(io.BytesIO(csv_bytes), filename=f"{target}_backlinks_overview.csv"),
-                    caption="CSV з summary + топ реф.доменів + топ анкорів"
+                    document=InputFile(io.BytesIO(csv_bytes), filename=f"{target}_backlinks_live_overview.csv"),
+                    caption="CSV з деталями по backlinks (live, top 100)"
                 )
                 return
 

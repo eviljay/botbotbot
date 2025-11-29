@@ -194,17 +194,34 @@ class DataForSEO:
         self,
         target: str,
         limit: int = 100,
-        order_by: str = "first_seen,desc",
+        offset: int = 0,
     ) -> Dict[str, Any]:
         """
         /v3/backlinks/backlinks/live
+
+        Використовує всі прапорці як у прикладі:
+        - тільки live посилання
+        - включає субдомени
+        - виключає внутрішні посилання
+        - включає indirect links
+        - mode = as_is
+        - rank_scale = one_hundred
         """
         task = {
             "target": target,
             "limit": limit,
-            "order_by": order_by,
+            "offset": offset,
+            "internal_list_limit": 10,
+            "backlinks_status_type": "live",
+            "include_subdomains": True,
+            "exclude_internal_backlinks": True,
+            "include_indirect_links": True,
+            "mode": "as_is",
+            "rank_scale": "one_hundred",
         }
         return await self._post("/v3/backlinks/backlinks/live", [task])
+
+ 
 
     async def backlinks_all(
         self,
@@ -260,9 +277,22 @@ class DataForSEO:
     async def backlinks_summary(self, target: str) -> Dict[str, Any]:
         """
         /v3/backlinks/summary/live
+
+        Використовує ті самі прапорці, що і backlinks_live,
+        щоб totals відповідали.
         """
-        task = {"target": target}
+        task = {
+            "target": target,
+            "internal_list_limit": 10,
+            "backlinks_status_type": "live",
+            "include_subdomains": True,
+            "exclude_internal_backlinks": True,
+            "include_indirect_links": True,
+            "rank_scale": "one_hundred",
+        }
         return await self._post("/v3/backlinks/summary/live", [task])
+
+ 
 
     async def refdomains_live(
         self,
