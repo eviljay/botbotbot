@@ -11,6 +11,7 @@ from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
 from httpx import AsyncClient, ConnectError, HTTPError
+from html import escape
 
 from telegram.error import TelegramError
 from telegram import (
@@ -1792,10 +1793,9 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
                       # --- Backlinks Overview (one-line) ---
-            if aw == "backlinks_ov":
+                      if aw == "backlinks_ov":
                 target = main
 
-                # ===== summary =====
                 summary = await dfs.backlinks_summary(target)
                 s = _extract_result(summary)
 
@@ -1805,30 +1805,25 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 dofollow = totals.get("dofollow") or s.get("dofollow") or "-"
                 nofollow = totals.get("nofollow") or s.get("nofollow") or "-"
 
-                # ===== referring domains (top) =====
                 rdom = await dfs.refdomains_live(target, limit=20)
                 r_items = _extract_first_items(rdom)
                 rd_lines = []
                 for it in r_items[:10]:
                     d = it.get("domain") or it.get("referring_domain") or "-"
                     b = it.get("backlinks") or "-"
-                    rd_lines.append(f"• {d} — {b} backlinks")
+                    rd_lines.append(f"• {escape(str(d))} — {escape(str(b))} backlinks")
 
-                # ===== anchors (top) =====
-                # тут саме anchors_live, а не refdomains_live
                 anch = await dfs.anchors_live(target, limit=50)
                 a_items = _extract_first_items(anch)
                 a_lines = []
                 for it in a_items[:10]:
                     a = it.get("anchor") or "-"
                     b = it.get("backlinks") or "-"
-                    a_lines.append(f"• {a[:60]} — {b}")
+                    a_lines.append(f"• {escape(str(a))[:60]} — {escape(str(b))}")
 
-                # ===== CSV: summary + top ref.domains + top anchors =====
+                # CSV як ми вже зробили – без змін
                 buf = io.StringIO()
                 w = csv.writer(buf)
-
-                # Summary
                 w.writerow(["section", "metric", "value"])
                 w.writerow(["summary", "backlinks", backlinks])
                 w.writerow(["summary", "referring_domains", refdomains])
@@ -1836,7 +1831,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 w.writerow(["summary", "nofollow", nofollow])
                 w.writerow([])
 
-                # Top referring domains
                 w.writerow(["Top referring domains"])
                 w.writerow(["domain", "backlinks", "dofollow", "nofollow", "first_seen", "last_visited"])
                 for it in r_items:
@@ -1850,7 +1844,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ])
                 w.writerow([])
 
-                # Top anchors
                 w.writerow(["Top anchors"])
                 w.writerow(["anchor", "backlinks", "dofollow", "nofollow", "first_seen", "last_visited"])
                 for it in a_items:
@@ -1866,19 +1859,20 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 csv_bytes = buf.getvalue().encode()
 
                 bal_now = get_balance(uid)
+                target_safe = escape(target)
                 txt = (
-                    f"🔗 *Backlinks огляд для* **{target}**\n"
-                    f"• Backlinks: {backlinks}\n"
-                    f"• Referring domains: {refdomains}\n"
-                    f"• Dofollow: {dofollow} | Nofollow: {nofollow}\n\n"
-                    f"Топ реф.доменів:\n" + ("\n".join(rd_lines) or "—") + "\n\n"
-                    f"Топ анкорів:\n" + ("\n".join(a_lines) or "—") +
-                    f"\n\n💰 Списано {need_credits}. Баланс: {bal_now}"
+                    f"🔗 <b>Backlinks огляд для</b> <b>{target_safe}</b>\n"
+                    f"• Backlinks: {escape(str(backlinks))}\n"
+                    f"• Referring domains: {escape(str(refdomains))}\n"
+                    f"• Dofollow: {escape(str(dofollow))} | Nofollow: {escape(str(nofollow))}\n\n"
+                    f"Топ реф.доменів:\n" + ("<br>".join(rd_lines) or "—") + "<br><br>"
+                    f"Топ анкорів:\n" + ("<br>".join(a_lines) or "—") +
+                    f"<br><br>💰 Списано {escape(str(need_credits))}. Баланс: {escape(str(bal_now))}"
                 )
 
                 await update.message.reply_text(
                     txt,
-                    parse_mode="Markdown",
+                    parse_mode="HTML",          # тепер HTML
                     reply_markup=services_menu_keyboard()
                 )
 
@@ -1887,6 +1881,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     caption="CSV з summary + топ реф.доменів + топ анкорів"
                 )
                 return
+
 
 
             # --- Audit URL (one-line) ---
