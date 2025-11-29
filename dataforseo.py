@@ -264,19 +264,20 @@ class DataForSEO:
         task = {"target": target}
         return await self._post("/v3/backlinks/summary/live", [task])
 
-    async def refdomains_live(
+       async def refdomains_live(
         self,
         target: str,
         limit: int = 10,
-        order_by: str = "backlinks,desc",
     ) -> Dict[str, Any]:
         """
         /v3/backlinks/referring_domains/live
+
+        УВАГА: цей endpoint НЕ підтримує поле `order_by`,
+        тому відправляємо тільки target + limit (та інші дозволені поля при потребі).
         """
         task = {
             "target": target,
             "limit": limit,
-            "order_by": order_by,
         }
         return await self._post("/v3/backlinks/referring_domains/live", [task])
 
@@ -284,15 +285,15 @@ class DataForSEO:
         self,
         target: str,
         limit: int = 10,
-        order_by: str = "backlinks,desc",
     ) -> Dict[str, Any]:
         """
         /v3/backlinks/anchors/live
+
+        Аналогічно – без `order_by`.
         """
         task = {
             "target": target,
             "limit": limit,
-            "order_by": order_by,
         }
         return await self._post("/v3/backlinks/anchors/live", [task])
 
