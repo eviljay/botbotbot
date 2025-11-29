@@ -19,6 +19,10 @@ class DataForSEO:
         }
 
     async def _post(self, path: str, payload: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Базовий POST-запит до DataForSEO.
+        Повертає сирий JSON від API (як є).
+        """
         url = f"{self.base_url}{path}"
         async with AsyncClient(timeout=60) as client:
             resp = await client.post(url, headers=self._headers, json=payload)
@@ -58,8 +62,42 @@ class DataForSEO:
         """
         /v3/keywords_data/google_ads/keywords_for_keywords/live
 
-        DataForSEO тут *не* приймає page/limit – тільки keywords[], location_code, language_code
-        та додаткові параметри типу sort_by.
+        DataForSEO тут *не* приймає page/limit – тільки:
+        - keywords[]
+        - location_code
+        - language_code
+        - sort_by
+
+        ⚠ Специфіка:
+        Playground (і твій приклад) повертає відповідь БЕЗ "tasks",
+        приблизно так:
+
+        {
+          "status_code": 20000,
+          "result_count": 2,
+          "result": [
+            {...},
+            {...}
+          ]
+        }
+
+        А решта твого коду, скоріше за все, чекає структуру типу:
+        {
+          "tasks": [
+            {
+              "result": [
+                {
+                  "items": [ ... ]
+                }
+              ]
+            }
+          ]
+        }
+
+        Тому тут ми:
+        1) викликаємо API
+        2) якщо є top-level "result" — загортаємо його у фейковий tasks[0].result[0].items
+           щоб хендлери могли використовувати єдину логіку парсингу.
         """
         task = {
             "keywords": [keyword],
@@ -67,7 +105,33 @@ class DataForSEO:
             "language_code": language_code,
             "sort_by": sort_by,
         }
-        return await self._post("/v3/keywords_data/google_ads/keywords_for_keywords/live", [task])
+
+        raw = await self._post("/v3/keywords_data/google_ads/keywords_for_keywords/live", [task])
+
+        # Якщо API вже раптом повертає `tasks` (на випадок майбутніх змін) — нічого не чіпаємо.
+        if "tasks" in raw:
+            return raw
+
+        # Якщо відповідь у форматі, як у тебе з playground (top-level "result"):
+        if "result" in raw and isinstance(raw["result"], list):
+            wrapped = dict(raw)  # поверхнева копія, щоб не ламати оригінал
+            wrapped["tasks"] = [
+                {
+                    "id": raw.get("id"),
+                    "status_code": raw.get("status_code"),
+                    "status_message": raw.get("status_message"),
+                    "result": [
+                        {
+                            "items": raw["result"],
+                            "result_count": raw.get("result_count"),
+                        }
+                    ],
+                }
+            ]
+            return wrapped
+
+        # Фолбек — повертаємо як є (на всякий випадок)
+        return raw
 
     # ========= KEYWORD GAP (Labs: domain_intersection) =========
 
@@ -139,6 +203,10 @@ class DataForSEO:
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
         Пагінація backlinks/live через limit + offset.
+
+        Повертає:
+        - список всіх items (до max_total)
+        - total_count (із першої відповіді result.total_count)
         """
         all_items: List[Dict[str, Any]] = []
         offset = 0
@@ -152,23 +220,36 @@ class DataForSEO:
                 "order_by": order_by,
             }
             resp = await self._post("/v3/backlinks/backlinks/live", [task])
+
             tasks = resp.get("tasks") or []
             if not tasks:
                 break
+
             t0 = tasks[0] or {}
-            result = (t0.get("result") or [{}])[0]
+            result_list = t0.get("result") or []
+            if not result_list:
+                break
+
+            result = result_list[0] or {}
             items = result.get("items") or []
+
             if total == 0:
                 total = result.get("total_count") or len(items)
 
             all_items.extend(items)
+
+            # Стоп-умови:
             if not items or len(items) < page_size or len(all_items) >= max_total:
                 break
+
             offset += page_size
 
         return all_items[:max_total], total
 
     async def backlinks_summary(self, target: str) -> Dict[str, Any]:
+        """
+        /v3/backlinks/summary/live
+        """
         task = {"target": target}
         return await self._post("/v3/backlinks/summary/live", [task])
 
@@ -178,6 +259,9 @@ class DataForSEO:
         limit: int = 10,
         order_by: str = "backlinks,desc",
     ) -> Dict[str, Any]:
+        """
+        /v3/backlinks/referring_domains/live
+        """
         task = {
             "target": target,
             "limit": limit,
@@ -191,6 +275,9 @@ class DataForSEO:
         limit: int = 10,
         order_by: str = "backlinks,desc",
     ) -> Dict[str, Any]:
+        """
+        /v3/backlinks/anchors/live
+        """
         task = {
             "target": target,
             "limit": limit,
