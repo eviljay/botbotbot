@@ -825,7 +825,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         except ValueError:
             await update.message.reply_text("Напиши 10, 20 або 30 або 100 як глибину:")
             return
-        if depth not in (10, 20, 30,100):
+        if depth not in (10, 20, 30, 100):
             await update.message.reply_text("Підтримуються значення 10, 20 або 30 або 100.")
             return
 
@@ -1021,11 +1021,11 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
         try:
+            # limit не відправляємо в DataForSEO, обрізаємо локально
             resp = await dfs.keywords_for_keywords(
                 kw,
                 location_name=country,
                 language_name=language,
-                limit=limit,  # обрізання робимо вже в боті
             )
         except Exception as e:
             log.exception("KW ideas request failed")
@@ -1412,7 +1412,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     main,
                     location_name=country,
                     language_name=lang,
-                    limit=limit,
                 )
                 items = _extract_first_items(resp)
                 if not items:
