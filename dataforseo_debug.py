@@ -20,6 +20,7 @@ async def debug_keywords_for_keywords(keyword: str, location: int, language: str
         "language_code": language,
         "sort_by": "relevance",
     }]
+print("RAW DATAFORSEO:\n", json.dumps(res, ensure_ascii=False, indent=2))
 
     url = "https://api.dataforseo.com/v3/keywords_data/google_ads/keywords_for_keywords/live"
 
