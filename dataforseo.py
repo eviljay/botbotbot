@@ -1,7 +1,7 @@
 import base64
 from typing import Any, Dict, List, Tuple
 
-from httpx import AsyncClient, HTTPError
+from httpx import AsyncClient
 
 
 class DataForSEO:
@@ -40,7 +40,6 @@ class DataForSEO:
     ) -> Dict[str, Any]:
         """
         /v3/serp/google/organic/live
-         
         """
         task = {
             "keyword": keyword,
@@ -49,7 +48,7 @@ class DataForSEO:
             "se_domain": "google.com",
             "depth": depth,
         }
-        return await self._post("/v3/serp/google/organic/live/advanced", [task])
+        return await self._post("/v3/serp/google/organic/live", [task])
 
     # ========= KEYWORDS DATA (Google Ads) =========
 
@@ -63,9 +62,7 @@ class DataForSEO:
         """
         /v3/keywords_data/google_ads/keywords_for_keywords/live
 
-        ВАЖЛИВО:
-        - метод повертає СИРИЙ JSON від DataForSEO
-        - парсинг структури (tasks/result/items) робимо окремо в хелпері
+        Повертає сирий JSON.
         """
         task = {
             "keywords": [keyword],
@@ -75,7 +72,27 @@ class DataForSEO:
         }
         return await self._post("/v3/keywords_data/google_ads/keywords_for_keywords/live", [task])
 
-        # ========= KEYWORD GAP (Labs: domain_intersection) =========
+    async def keywords_for_site(
+        self,
+        target: str,
+        location_code: int,
+        language_code: str,
+        sort_by: str = "relevance",
+    ) -> Dict[str, Any]:
+        """
+        /v3/keywords_data/google_ads/keywords_for_site/live
+
+        Автоматичний підбір ключових для сайту.
+        """
+        task = {
+            "target": target,
+            "location_code": location_code,
+            "language_code": language_code,
+            "sort_by": sort_by,
+        }
+        return await self._post("/v3/keywords_data/google_ads/keywords_for_site/live", [task])
+
+    # ========= KEYWORD GAP (Labs: domain_intersection) =========
 
     async def keywords_gap(
         self,
@@ -89,35 +106,34 @@ class DataForSEO:
         /v3/dataforseo_labs/google/domain_intersection/live
 
         target1 — наш домен
-        target2 — конкурент (по одному таску на конкурента)
-
-        Повертаємо один resp з кількома tasks (по одному на кожного конкурента).
+        target2..4 — конкуренти
+        intersections — з ким робити перетин.
         """
-        tasks: List[Dict[str, Any]] = []
+        comps = competitors[:3]
+        task: Dict[str, Any] = {
+            "target1": target,
+            "include_subdomains": True,
+            "search_partners": False,
+            "location_code": location_code,
+            "language_code": language_code,
+            "limit": limit,
+        }
+        intersections = []
 
-        for comp in competitors[:3]:
-            tasks.append(
-                {
-                    "target1": target,
-                    "target2": comp,
-                    "location_code": location_code,
-                    "language_code": language_code,
-                    "limit": limit,
-                    # це з доки: треба, щоб повернули SERP-елементи з рангами
-                    "include_serp_info": True,
-                    # можна залишити false, поки не треба клікстрім
-                    "include_clickstream_data": False,
-                }
-            )
+        if len(comps) >= 1:
+            task["target2"] = comps[0]
+            intersections.append("target2")
+        if len(comps) >= 2:
+            task["target3"] = comps[1]
+            intersections.append("target3")
+        if len(comps) >= 3:
+            task["target4"] = comps[2]
+            intersections.append("target4")
 
-        if not tasks:
-            return {"tasks": []}
+        if intersections:
+            task["intersections"] = intersections
 
-        return await self._post(
-            "/v3/dataforseo_labs/google/domain_intersection/live",
-            tasks,
-        )
-
+        return await self._post("/v3/dataforseo_labs/google/domain_intersection/live", [task])
 
     # ========= BACKLINKS =========
 
