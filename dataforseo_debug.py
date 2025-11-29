@@ -16,55 +16,29 @@ API_PASSWORD = "d752edcc5e5dbd73"
 BASE_URL = "https://api.dataforseo.com"
 
 
-def extract_kfk_items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def find_keyword_items(node: Any) -> List[Dict[str, Any]]:
     """
-    Дістає список keyword-ів з відповіді keywords_for_keywords.
-
-    Підтримує:
-    1) Формат без tasks:
-       {
-         "status_code": 20000,
-         "result_count": 2,
-         "result": [ {...}, {...} ]
-       }
-
-    2) Формат із tasks/items:
-       {
-         "tasks": [
-           {
-             "result": [
-               {
-                 "items": [ {...}, {...} ]
-               }
-             ]
-           }
-         ]
-       }
+    Рекурсивно шукає перший список dict'ів, у яких є ключ 'keyword'.
+    Працює з будь-якою вкладеністю.
     """
-    if not isinstance(data, dict):
-        return []
+    # Якщо це список
+    if isinstance(node, list):
+        # Якщо це список об’єктів з 'keyword' – це те, що нам треба
+        if node and all(isinstance(x, dict) and "keyword" in x for x in node):
+            return node
 
-    # Випадок 1: top-level result = список keyword-ів
-    if isinstance(data.get("result"), list):
-        res_list = data["result"]
-        if res_list and isinstance(res_list[0], dict) and "keyword" in res_list[0]:
-            return res_list
+        # Інакше обходимо всіх дітей
+        for x in node:
+            found = find_keyword_items(x)
+            if found:
+                return found
 
-        # інколи буває result[0].items
-        first = res_list[0] if res_list else {}
-        if isinstance(first, dict) and isinstance(first.get("items"), list):
-            return first["items"]
-
-    # Випадок 2: tasks[0].result[0].items
-    tasks = data.get("tasks") or []
-    if tasks:
-        t0 = tasks[0] or {}
-        result_list = t0.get("result") or []
-        if result_list:
-            r0 = result_list[0] or {}
-            items = r0.get("items") or []
-            if isinstance(items, list):
-                return items
+    # Якщо це dict – обходимо значення
+    elif isinstance(node, dict):
+        for v in node.values():
+            found = find_keyword_items(v)
+            if found:
+                return found
 
     return []
 
@@ -103,14 +77,16 @@ async def debug_keywords_for_keywords(keyword: str, location_code: int, language
         print(json.dumps(data, ensure_ascii=False, indent=2))
         print("\n==========================================================\n")
 
-        # 2) PARSED KEYWORDS
-        items = extract_kfk_items(data)
+        # 2) Шукаємо keywords будь-де
+        items = find_keyword_items(data)
 
-        print("============== PARSED KEYWORDS ==================\n")
+        print("============== PARSED KEYWORDS (found by search) ==================\n")
 
         if not items:
-            print("⚠️ No items found by extract_kfk_items().")
+            print("⚠️ No items with 'keyword' found in JSON.")
             return
+
+        print(f"Знайшов {len(items)} keyword-ів:\n")
 
         for i, item in enumerate(items, start=1):
             print(f"{i}. {item.get('keyword')}")
@@ -119,7 +95,7 @@ async def debug_keywords_for_keywords(keyword: str, location_code: int, language
             print(f"   CPC: {item.get('cpc')}")
             print("")
 
-        print("==========================================================\n")
+        print("===================================================================\n")
 
 
 # ====================== MAIN ======================
