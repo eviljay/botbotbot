@@ -6,8 +6,8 @@ from httpx import AsyncClient, HTTPError
 
 class DataForSEO:
     """
-    Невеличкий async-клієнт для DataForSEO v3.
-    Працюємо через Basic Auth (login:password), BASE береться з ENV.
+    Async-клієнт для DataForSEO v3.
+    Працює через Basic Auth (API_LOGIN:API_PASSWORD).
     """
 
     def __init__(self, login: str, password: str, base_url: str = "https://api.dataforseo.com") -> None:
@@ -20,8 +20,8 @@ class DataForSEO:
 
     async def _post(self, path: str, payload: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Базовий POST-запит до DataForSEO.
-        Повертає сирий JSON від API (як є).
+        Базовий POST-запит. Повертає сирий JSON від DataForSEO.
+        НІЧОГО не парсимо тут — тільки HTTP і JSON.
         """
         url = f"{self.base_url}{path}"
         async with AsyncClient(timeout=60) as client:
@@ -62,42 +62,9 @@ class DataForSEO:
         """
         /v3/keywords_data/google_ads/keywords_for_keywords/live
 
-        DataForSEO тут *не* приймає page/limit – тільки:
-        - keywords[]
-        - location_code
-        - language_code
-        - sort_by
-
-        ⚠ Специфіка:
-        Playground (і твій приклад) повертає відповідь БЕЗ "tasks",
-        приблизно так:
-
-        {
-          "status_code": 20000,
-          "result_count": 2,
-          "result": [
-            {...},
-            {...}
-          ]
-        }
-
-        А решта твого коду, скоріше за все, чекає структуру типу:
-        {
-          "tasks": [
-            {
-              "result": [
-                {
-                  "items": [ ... ]
-                }
-              ]
-            }
-          ]
-        }
-
-        Тому тут ми:
-        1) викликаємо API
-        2) якщо є top-level "result" — загортаємо його у фейковий tasks[0].result[0].items
-           щоб хендлери могли використовувати єдину логіку парсингу.
+        ВАЖЛИВО:
+        - метод повертає СИРИЙ JSON від DataForSEO
+        - парсинг структури (tasks/result/items) робимо окремо в хелпері
         """
         task = {
             "keywords": [keyword],
@@ -105,33 +72,7 @@ class DataForSEO:
             "language_code": language_code,
             "sort_by": sort_by,
         }
-logging.info("RAW DATAFORSEO: %s", json.dumps(res, ensure_ascii=False, indent=2))
-        raw = await self._post("/v3/keywords_data/google_ads/keywords_for_keywords/live", [task])
-
-        # Якщо API вже раптом повертає `tasks` (на випадок майбутніх змін) — нічого не чіпаємо.
-        if "tasks" in raw:
-            return raw
-
-        # Якщо відповідь у форматі, як у тебе з playground (top-level "result"):
-        if "result" in raw and isinstance(raw["result"], list):
-            wrapped = dict(raw)  # поверхнева копія, щоб не ламати оригінал
-            wrapped["tasks"] = [
-                {
-                    "id": raw.get("id"),
-                    "status_code": raw.get("status_code"),
-                    "status_message": raw.get("status_message"),
-                    "result": [
-                        {
-                            "items": raw["result"],
-                            "result_count": raw.get("result_count"),
-                        }
-                    ],
-                }
-            ]
-            return wrapped
-
-        # Фолбек — повертаємо як є (на всякий випадок)
-        return raw
+        return await self._post("/v3/keywords_data/google_ads/keywords_for_keywords/live", [task])
 
     # ========= KEYWORD GAP (Labs: domain_intersection) =========
 
@@ -144,11 +85,11 @@ logging.info("RAW DATAFORSEO: %s", json.dumps(res, ensure_ascii=False, indent=2)
         limit: int = 50,
     ) -> Dict[str, Any]:
         """
-        Використовуємо /v3/dataforseo_labs/google/domain_intersection/live
+        /v3/dataforseo_labs/google/domain_intersection/live
 
         target1 — наш домен
         target2..4 — конкуренти
-        intersections — з ким саме робити перетин.
+        intersections — з ким робити перетин.
         """
         comps = competitors[:3]
         task: Dict[str, Any] = {
@@ -206,7 +147,7 @@ logging.info("RAW DATAFORSEO: %s", json.dumps(res, ensure_ascii=False, indent=2)
 
         Повертає:
         - список всіх items (до max_total)
-        - total_count (із першої відповіді result.total_count)
+        - total_count (із result.total_count)
         """
         all_items: List[Dict[str, Any]] = []
         offset = 0
@@ -238,7 +179,6 @@ logging.info("RAW DATAFORSEO: %s", json.dumps(res, ensure_ascii=False, indent=2)
 
             all_items.extend(items)
 
-            # Стоп-умови:
             if not items or len(items) < page_size or len(all_items) >= max_total:
                 break
 

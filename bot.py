@@ -1062,7 +1062,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=ReplyKeyboardRemove(),
         )
 
-        try:
+              try:
             resp = await dfs.keywords_for_keywords(
                 kw,
                 location_code=location_code,
@@ -1073,16 +1073,20 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"Помилка від DataForSEO: {e}")
             return
 
-        items = _extract_first_items(resp)
+        # ===== нова логіка: шукаємо keywords будь-де в JSON і фільтруємо =====
+        items_all = find_keyword_items(resp)
+        items = filter_keywords(items_all, min_search_volume=1)  # тільки search_volume > 0
+
         if not items:
             bal_now = get_balance(uid)
             await update.message.reply_text(
-                f"Нічого не знайшов 😕\nБаланс: {bal_now}",
+                f"Нічого не знайшов 😕 (або всі з 0 пошуку)\nБаланс: {bal_now}",
                 reply_markup=services_menu_keyboard(),
             )
             return
 
         items_limited = items[:limit]
+
 
         lines = []
         for it in items_limited[:10]:
@@ -1454,15 +1458,20 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     location_code=location_code,
                     language_code=language_code,
                 )
-                items = _extract_first_items(resp)
+
+                # шукаємо keywords + фільтруємо по search_volume
+                items_all = find_keyword_items(resp)
+                items = filter_keywords(items_all, min_search_volume=1)
+
                 if not items:
                     bal_now = get_balance(uid)
                     return await update.message.reply_text(
-                        f"Нічого не знайшов 😕\nБаланс: {bal_now}",
+                        f"Нічого не знайшов 😕 (або всі з 0 пошуку)\nБаланс: {bal_now}",
                         reply_markup=services_menu_keyboard(),
                     )
 
                 items_limited = items[:limit]
+
 
                 lines = []
                 for it in items_limited[:10]:
