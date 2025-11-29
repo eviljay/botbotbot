@@ -9,59 +9,6 @@ class DataForSEO:
     Async-клієнт для DataForSEO v3.
     Працює через Basic Auth (API_LOGIN:API_PASSWORD).
     """
-    async def suggest_landing_url(
-        self,
-        keyword: str,
-        target_domain: str,
-        location_code: int,
-        language_code: str,
-        depth: int = 20,
-    ) -> str | None:
-        """
-        Підбір релевантної сторінки сайту для keyword'а.
-        Логіка:
-        - робимо SERP по keyword
-        - шукаємо перший результат, де в URL є target_domain
-        - повертаємо цей URL, або None якщо нічого не знайшли
-        """
-        task = {
-            "keyword": keyword,
-            "location_code": location_code,
-            "language_code": language_code,
-            "se_domain": "google.com",
-            "depth": depth,
-        }
-        resp = await self._post("/v3/serp/google/organic/live", [task])
-
-        tasks = resp.get("tasks") or []
-        if not tasks:
-            return None
-
-        t0 = tasks[0] or {}
-        result_list = t0.get("result") or []
-        if not result_list:
-            return None
-
-        items = result_list[0].get("items") or []
-        if not items:
-            return None
-
-        target_domain = target_domain.lower().strip()
-        if target_domain.startswith("http://"):
-            target_domain = target_domain[7:]
-        if target_domain.startswith("https://"):
-            target_domain = target_domain[8:]
-        # вирізаємо шлях, залишаємо домен
-        target_domain = target_domain.split("/")[0]
-
-        for it in items:
-            url = (it.get("url") or it.get("link") or "").lower()
-            if not url:
-                continue
-            if target_domain in url:
-                return url
-
-        return None
 
     def __init__(self, login: str, password: str, base_url: str = "https://api.dataforseo.com") -> None:
         self.base_url = base_url.rstrip("/")
@@ -102,6 +49,59 @@ class DataForSEO:
             "depth": depth,
         }
         return await self._post("/v3/serp/google/organic/live", [task])
+
+    async def suggest_landing_url(
+        self,
+        keyword: str,
+        target_domain: str,
+        location_code: int,
+        language_code: str,
+        depth: int = 20,
+    ) -> str | None:
+        """
+        Підбір релевантної сторінки сайту для keyword'а.
+        Логіка:
+        - робимо SERP по keyword
+        - шукаємо перший результат, де в URL є target_domain
+        - повертаємо цей URL, або None якщо нічого не знайшли
+        """
+        task = {
+            "keyword": keyword,
+            "location_code": location_code,
+            "language_code": language_code,
+            "se_domain": "google.com",
+            "depth": depth,
+        }
+        resp = await self._post("/v3/serp/google/organic/live", [task])
+
+        tasks = resp.get("tasks") or []
+        if not tasks:
+            return None
+
+        t0 = tasks[0] or {}
+        result_list = t0.get("result") or []
+        if not result_list:
+            return None
+
+        items = result_list[0].get("items") or []
+        if not items:
+            return None
+
+        target_domain_norm = target_domain.lower().strip()
+        if target_domain_norm.startswith("http://"):
+            target_domain_norm = target_domain_norm[7:]
+        if target_domain_norm.startswith("https://"):
+            target_domain_norm = target_domain_norm[8:]
+        target_domain_norm = target_domain_norm.split("/")[0]
+
+        for it in items:
+            url = (it.get("url") or it.get("link") or "").lower()
+            if not url:
+                continue
+            if target_domain_norm in url:
+                return url
+
+        return None
 
     # ========= KEYWORDS DATA (Google Ads) =========
 
@@ -171,7 +171,7 @@ class DataForSEO:
             "language_code": language_code,
             "limit": limit,
         }
-        intersections = []
+        intersections: List[str] = []
 
         if len(comps) >= 1:
             task["target2"] = comps[0]
@@ -264,7 +264,7 @@ class DataForSEO:
         task = {"target": target}
         return await self._post("/v3/backlinks/summary/live", [task])
 
-       async def refdomains_live(
+    async def refdomains_live(
         self,
         target: str,
         limit: int = 10,
@@ -272,8 +272,7 @@ class DataForSEO:
         """
         /v3/backlinks/referring_domains/live
 
-        УВАГА: цей endpoint НЕ підтримує поле `order_by`,
-        тому відправляємо тільки target + limit (та інші дозволені поля при потребі).
+        УВАГА: endpoint НЕ підтримує поле `order_by`.
         """
         task = {
             "target": target,
@@ -289,7 +288,7 @@ class DataForSEO:
         """
         /v3/backlinks/anchors/live
 
-        Аналогічно – без `order_by`.
+        Аналогічно — без `order_by`.
         """
         task = {
             "target": target,
