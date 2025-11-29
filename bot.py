@@ -1,4 +1,4 @@
-# bot.py
+
 import os
 import io
 import re
@@ -126,6 +126,7 @@ SERP_LOCATIONS = [
     "Germany",
     "Sweden",
     "Norway",
+    "Finland",
     "Denmark",
     "Netherlands",
     "Czech Republic",
@@ -154,6 +155,43 @@ SERP_LANGUAGES = [
     "Italian",
     "English",
 ]
+
+# Мапи для DataForSEO (location_code / language_code)
+LOCATION_CODES = {
+    "Ukraine": 2804,
+    "Poland": 2616,
+    "Germany": 2276,
+    "Sweden": 2752,
+    "Norway": 2578,
+    "Finland": 2246,
+    "Denmark": 2208,
+    "Netherlands": 2528,
+    "Czech Republic": 2203,
+    "Spain": 2724,
+    "France": 2250,
+    "Italy": 2380,
+    "United States": 2840,
+    "United Kingdom": 2826,
+    "Canada": 2124,
+    "Australia": 2036,
+    "New Zealand": 2554,
+}
+
+LANGUAGE_CODES = {
+    "Ukrainian": "uk",
+    "Russian": "ru",
+    "Polish": "pl",
+    "German": "de",
+    "Swedish": "sv",
+    "Norwegian": "no",
+    "Danish": "da",
+    "Dutch": "nl",
+    "Czech": "cs",
+    "Spanish": "es",
+    "French": "fr",
+    "Italian": "it",
+    "English": "en",
+}
 
 
 def countries_keyboard() -> ReplyKeyboardMarkup:
@@ -830,8 +868,10 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             return
 
         keyword = (params.get("keyword") or "").strip()
-        country = params.get("country") or "Ukraine"
-        language = params.get("language") or "Ukrainian"
+        country_name = params.get("country") or "Ukraine"
+        language_name = params.get("language") or "Ukrainian"
+        location_code = LOCATION_CODES.get(country_name, 2840)
+        language_code = LANGUAGE_CODES.get(language_name, "en")
 
         context.user_data.pop("serp_state", None)
         context.user_data.pop("serp_params", None)
@@ -853,8 +893,8 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         try:
             resp = await dfs.serp_google_organic(
                 keyword,
-                location_name=country,
-                language_name=language,
+                location_code=location_code,
+                language_code=language_code,
                 depth=depth,
             )
         except Exception as e:
@@ -994,8 +1034,10 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         kw = data.get("keyword") or ""
-        country = data.get("country") or "Ukraine"
-        language = data.get("language") or "Ukrainian"
+        country_name = data.get("country") or "Ukraine"
+        language_name = data.get("language") or "Ukrainian"
+        location_code = LOCATION_CODES.get(country_name, 2840)
+        language_code = LANGUAGE_CODES.get(language_name, "en")
 
         context.user_data.pop("kwideas_state", None)
         context.user_data.pop("kwideas", None)
@@ -1015,7 +1057,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         await update.message.reply_text(
-            f"Шукаю keyword ideas для *{kw}* ({country}, {language}, {limit})…",
+            f"Шукаю keyword ideas для *{kw}* ({country_name}, {language_name}, {limit})…",
             parse_mode="Markdown",
             reply_markup=ReplyKeyboardRemove(),
         )
@@ -1023,9 +1065,8 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         try:
             resp = await dfs.keywords_for_keywords(
                 kw,
-                location_name=country,
-                language_name=language,
-                limit=limit,  # API тепер ігнорує це поле, обрізання робимо в боті
+                location_code=location_code,
+                language_code=language_code,
             )
         except Exception as e:
             log.exception("KW ideas request failed")
@@ -1174,8 +1215,10 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         data["language"] = text
         target = data.get("target")
         competitors = data.get("competitors") or []
-        country = data.get("country") or "Ukraine"
-        language = data.get("language") or "Ukrainian"
+        country_name = data.get("country") or "Ukraine"
+        language_name = data.get("language") or "Ukrainian"
+        location_code = LOCATION_CODES.get(country_name, 2840)
+        language_code = LANGUAGE_CODES.get(language_name, "en")
 
         context.user_data.pop("gap_state", None)
         context.user_data.pop("gap", None)
@@ -1204,8 +1247,8 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
             resp = await dfs.keywords_gap(
                 target,
                 competitors,
-                location_name=country,
-                language_name=language,
+                location_code=location_code,
+                language_code=language_code,
                 limit=50,
             )
         except Exception as e:
@@ -1222,14 +1265,17 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
             r0 = result[0]
             items = r0.get("items") or []
             data_block = t.get("data") or {}
-            comp_list = data_block.get("competitors") or ["competitor"]
-            comp_name = comp_list[0] if isinstance(comp_list, list) and comp_list else "competitor"
+            # у domain_intersection конкуренти сидять у полях target2/3/4,
+            # але для простоти беремо перший з intersections
+            intersections = data_block.get("intersections") or []
+            comp_label = intersections[0] if intersections else "target2"
+            comp_name = data_block.get(comp_label) or "competitor"
             for it in items:
                 kw = it.get("keyword") or it.get("keyword_text") or ""
                 vol = it.get("search_volume") or it.get("avg_monthly_searches") or ""
-                my_rank = it.get("target_rank") or it.get("rank") or ""
-                comp_ranks = it.get("competitor_ranks") or {}
-                rows.append((kw, vol, my_rank, comp_name, comp_ranks))
+                my_rank = it.get("rank1") or it.get("target_rank") or it.get("rank") or ""
+                comp_rank = it.get("rank2") or ""
+                rows.append((kw, vol, my_rank, comp_name, comp_rank))
 
         if not rows:
             bal_now = get_balance(uid)
@@ -1240,27 +1286,15 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
             return
 
         lines = []
-        for kw, vol, my, comp_name, comp_ranks in rows[:10]:
-            if isinstance(comp_ranks, dict):
-                comp_str = ", ".join(f"{k}:{v}" for k, v in comp_ranks.items())
-            elif isinstance(comp_ranks, list):
-                comp_str = ", ".join(str(x) for x in comp_ranks[:3])
-            else:
-                comp_str = "-"
-            lines.append(f"• {kw} — vol:{vol}, ми:{my}, vs {comp_name}: {comp_str}")
+        for kw, vol, my, comp_name, comp_rank in rows[:10]:
+            lines.append(f"• {kw} — vol:{vol}, ми:{my}, vs {comp_name}: {comp_rank}")
         preview = "⚔️ *Keyword Gap*\n" + "\n".join(lines)
 
         buf = io.StringIO()
         w = csv.writer(buf)
-        w.writerow(["keyword", "search_volume", "our_rank", "competitor", "competitor_ranks"])
-        for kw, vol, my, comp_name, comp_ranks in rows:
-            if isinstance(comp_ranks, dict):
-                comp_str = "; ".join(f"{k}:{v}" for k, v in comp_ranks.items())
-            elif isinstance(comp_ranks, list):
-                comp_str = "; ".join(str(x) for x in comp_ranks)
-            else:
-                comp_str = ""
-            w.writerow([kw, vol, my, comp_name, comp_str])
+        w.writerow(["keyword", "search_volume", "our_rank", "competitor", "competitor_rank"])
+        for kw, vol, my, comp_name, comp_rank in rows:
+            w.writerow([kw, vol, my, comp_name, comp_rank])
         csv_bytes = buf.getvalue().encode()
 
         bal_now = get_balance(uid)
@@ -1342,8 +1376,10 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         main, opts = _parse_opts(text)
-        country = opts.get("country", "Ukraine")
-        lang = opts.get("lang", "Ukrainian")
+        country_name = opts.get("country", "Ukraine")
+        language_name = opts.get("lang", "Ukrainian")
+        location_code = LOCATION_CODES.get(country_name, 2840)
+        language_code = LANGUAGE_CODES.get(language_name, "en")
         limit = int(re.findall(r"\d+", opts.get("limit", "20"))[0]) if opts.get("limit") else 20
         prices = {
             "serp": SERP_CHARGE_UAH,
@@ -1364,7 +1400,12 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # SERP / Keywords / Gap залишилися для сумісності, але основний юз-кейс у флоу вище
             if aw == "serp":
                 depth = int(re.findall(r"\d+", opts.get("depth", "10"))[0]) if opts.get("depth") else 10
-                resp = await dfs.serp_google_organic(main, location_name=country, language_name=lang, depth=depth)
+                resp = await dfs.serp_google_organic(
+                    main,
+                    location_code=location_code,
+                    language_code=language_code,
+                    depth=depth,
+                )
                 items = _extract_first_items(resp)
                 if not items:
                     bal_now = get_balance(uid)
@@ -1410,9 +1451,8 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if aw == "keywords":
                 resp = await dfs.keywords_for_keywords(
                     main,
-                    location_name=country,
-                    language_name=lang,
-                    limit=limit,
+                    location_code=location_code,
+                    language_code=language_code,
                 )
                 items = _extract_first_items(resp)
                 if not items:
@@ -1469,13 +1509,12 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="Markdown",
                     )
 
-                rows = []
                 try:
                     resp = await dfs.keywords_gap(
                         main,
                         competitors,
-                        location_name=country,
-                        language_name=lang,
+                        location_code=location_code,
+                        language_code=language_code,
                         limit=limit,
                     )
                 except Exception as e:
@@ -1484,6 +1523,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
 
                 tasks = resp.get("tasks") or []
+                rows = []
                 for t in tasks:
                     result = t.get("result") or []
                     if not result:
@@ -1491,14 +1531,15 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     r0 = result[0]
                     items = r0.get("items") or []
                     data_block = t.get("data") or {}
-                    comp_list = data_block.get("competitors") or ["competitor"]
-                    comp_name = comp_list[0] if isinstance(comp_list, list) and comp_list else "competitor"
+                    intersections = data_block.get("intersections") or []
+                    comp_label = intersections[0] if intersections else "target2"
+                    comp_name = data_block.get(comp_label) or "competitor"
                     for it in items:
                         kw = it.get("keyword") or it.get("keyword_text") or ""
                         vol = it.get("search_volume") or it.get("avg_monthly_searches") or ""
-                        my_rank = it.get("target_rank") or it.get("rank") or ""
-                        comp_ranks = it.get("competitor_ranks") or {}
-                        rows.append((kw, vol, my_rank, comp_name, comp_ranks))
+                        my_rank = it.get("rank1") or it.get("target_rank") or it.get("rank") or ""
+                        comp_rank = it.get("rank2") or ""
+                        rows.append((kw, vol, my_rank, comp_name, comp_rank))
 
                 if not rows:
                     bal_now = get_balance(uid)
@@ -1508,27 +1549,15 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
 
                 lines = []
-                for kw, vol, my, comp_name, comp_ranks in rows[:10]:
-                    if isinstance(comp_ranks, dict):
-                        comp_str = ", ".join(f"{k}:{v}" for k, v in comp_ranks.items())
-                    elif isinstance(comp_ranks, list):
-                        comp_str = ", ".join(str(x) for x in comp_ranks[:3])
-                    else:
-                        comp_str = "-"
-                    lines.append(f"• {kw} — vol:{vol}, ми:{my}, vs {comp_name}: {comp_str}")
+                for kw, vol, my, comp_name, comp_rank in rows[:10]:
+                    lines.append(f"• {kw} — vol:{vol}, ми:{my}, vs {comp_name}: {comp_rank}")
                 preview = "⚔️ *Keyword Gap*\n" + "\n".join(lines)
 
                 buf = io.StringIO()
                 w = csv.writer(buf)
-                w.writerow(["keyword", "search_volume", "our_rank", "competitor", "competitor_ranks"])
-                for kw, vol, my, comp_name, comp_ranks in rows:
-                    if isinstance(comp_ranks, dict):
-                        comp_str = "; ".join(f"{k}:{v}" for k, v in comp_ranks.items())
-                    elif isinstance(comp_ranks, list):
-                        comp_str = "; ".join(str(x) for x in comp_ranks)
-                    else:
-                        comp_str = ""
-                    w.writerow([kw, vol, my, comp_name, comp_str])
+                w.writerow(["keyword", "search_volume", "our_rank", "competitor", "competitor_rank"])
+                for kw, vol, my, comp_name, comp_rank in rows:
+                    w.writerow([kw, vol, my, comp_name, comp_rank])
                 csv_bytes = buf.getvalue().encode()
 
                 bal_now = get_balance(uid)

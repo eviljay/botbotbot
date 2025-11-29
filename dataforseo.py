@@ -1,187 +1,174 @@
-import os
-from typing import List, Tuple, Optional
+import base64
+from typing import Any, Dict, List, Tuple
 
-from httpx import AsyncClient
+from httpx import AsyncClient, HTTPError
 
 
 class DataForSEO:
     """
-    Простий async-клієнт для DataForSEO v3.
-    Працює через POST-запити з body = [ {...} ].
+    Невеличкий async-клієнт для DataForSEO v3.
+    Працюємо через Basic Auth (login:password), BASE береться з ENV.
     """
 
-    def __init__(self, login: str, password: str, base_url: str = "https://api.dataforseo.com"):
-        self.login = login
-        self.password = password
+    def __init__(self, login: str, password: str, base_url: str = "https://api.dataforseo.com") -> None:
         self.base_url = base_url.rstrip("/")
+        auth_bytes = f"{login}:{password}".encode("utf-8")
+        self._headers = {
+            "Authorization": "Basic " + base64.b64encode(auth_bytes).decode("utf-8"),
+            "Content-Type": "application/json",
+        }
 
-    # ===== базовий POST =====
-    async def _post(self, path: str, payload: list) -> dict:
+    async def _post(self, path: str, payload: List[Dict[str, Any]]) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
-        async with AsyncClient(auth=(self.login, self.password), timeout=60) as client:
-            r = await client.post(url, json=payload)
-            r.raise_for_status()
-            return r.json()
+        async with AsyncClient(timeout=60) as client:
+            resp = await client.post(url, headers=self._headers, json=payload)
+            resp.raise_for_status()
+            return resp.json()
 
-    # ========== SERP GOOGLE ORGANIC ==========
+    # ========= SERP =========
+
     async def serp_google_organic(
         self,
         keyword: str,
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
+        location_code: int,
+        language_code: str,
         depth: int = 10,
-    ) -> dict:
+    ) -> Dict[str, Any]:
         """
-        /v3/serp/google/organic/live/advanced
+        /v3/serp/google/organic/live
         """
         task = {
             "keyword": keyword,
-            "location_name": location_name,
-            "language_name": language_name,
-            "device": "desktop",
+            "location_code": location_code,
+            "language_code": language_code,
+            "se_domain": "google.com",
             "depth": depth,
         }
-        return await self._post("/v3/serp/google/organic/live/advanced", [task])
+        return await self._post("/v3/serp/google/organic/live", [task])
 
-    # ========== KEYWORD IDEAS (KEYWORDS FOR KEYWORDS) ==========
+    # ========= KEYWORDS DATA (Google Ads) =========
+
     async def keywords_for_keywords(
         self,
         keyword: str,
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
-        limit: int = 100,  # тут тільки для того, щоб бот знав, скільки різати
-    ) -> dict:
+        location_code: int,
+        language_code: str,
+        sort_by: str = "relevance",
+    ) -> Dict[str, Any]:
         """
         /v3/keywords_data/google_ads/keywords_for_keywords/live
 
-        У цього endpoint-а нема полів page/limit у body,
-        тому передаємо тільки keywords + location_name + language_name.
+        DataForSEO тут *не* приймає page/limit – тільки keywords[], location_code, language_code
+        та додаткові параметри типу sort_by.
         """
         task = {
             "keywords": [keyword],
-            "location_name": location_name,
-            "language_name": language_name,
+            "location_code": location_code,
+            "language_code": language_code,
+            "sort_by": sort_by,
         }
         return await self._post("/v3/keywords_data/google_ads/keywords_for_keywords/live", [task])
 
-    # ========== KEYWORD GAP (LABS: KEYWORD_INTERSECTIONS) ==========
+    # ========= KEYWORD GAP (Labs: domain_intersection) =========
+
     async def keywords_gap(
         self,
         target: str,
         competitors: List[str],
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
+        location_code: int,
+        language_code: str,
         limit: int = 50,
-    ) -> dict:
+    ) -> Dict[str, Any]:
         """
-        /v3/dataforseo_labs/google/keyword_intersections/live
-        """
-        task = {
-            "target": target,
-            "competitors": competitors,
-            "location_name": location_name,
-            "language_name": language_name,
-            "limit": limit,
-        }
-        return await self._post("/v3/dataforseo_labs/google/keyword_intersections/live", [task])
+        Використовуємо /v3/dataforseo_labs/google/domain_intersection/live
 
-    # ========== DOMAIN INTERSECTION (опційно) ==========
-    async def domain_intersection(
-        self,
-        target1: str,
-        target2: str,
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
-        limit: int = 50,
-    ) -> dict:
+        target1 — наш домен
+        target2..4 — конкуренти
+        intersections — з ким саме робити перетин.
         """
-        /v3/dataforseo_labs/google/domain_intersection/live
-        """
-        task = {
-            "se_type": "google",
-            "target1": target1,
-            "target2": target2,
-            "location_name": location_name,
-            "language_name": language_name,
-            "include_serp_info": False,
-            "intersections": False,
+        comps = competitors[:3]
+        task: Dict[str, Any] = {
+            "target1": target,
+            "include_subdomains": True,
+            "search_partners": False,
+            "location_code": location_code,
+            "language_code": language_code,
             "limit": limit,
         }
+        intersections = []
+
+        if len(comps) >= 1:
+            task["target2"] = comps[0]
+            intersections.append("target2")
+        if len(comps) >= 2:
+            task["target3"] = comps[1]
+            intersections.append("target3")
+        if len(comps) >= 3:
+            task["target4"] = comps[2]
+            intersections.append("target4")
+
+        if intersections:
+            task["intersections"] = intersections
+
         return await self._post("/v3/dataforseo_labs/google/domain_intersection/live", [task])
 
-    # ========== BACKLINKS ==========
+    # ========= BACKLINKS =========
+
     async def backlinks_live(
         self,
         target: str,
         limit: int = 100,
-        order_by: Optional[str] = None,
-    ) -> dict:
+        order_by: str = "first_seen,desc",
+    ) -> Dict[str, Any]:
         """
-        /v3/backlinks/live
+        /v3/backlinks/backlinks/live
         """
         task = {
             "target": target,
             "limit": limit,
+            "order_by": order_by,
         }
-        if order_by:
-            task["order_by"] = order_by
-        return await self._post("/v3/backlinks/live", [task])
+        return await self._post("/v3/backlinks/backlinks/live", [task])
 
     async def backlinks_all(
         self,
         target: str,
-        order_by: Optional[str] = None,
+        order_by: str = "first_seen,desc",
         page_size: int = 1000,
         max_total: int = 200000,
-    ) -> Tuple[list, int]:
+    ) -> Tuple[List[Dict[str, Any]], int]:
         """
-        Пагінація по /v3/backlinks/live, поки не зберемо все або не впремось в max_total.
-        Повертає (items_list, approx_total).
+        Пагінація backlinks/live через limit + offset.
         """
+        all_items: List[Dict[str, Any]] = []
         offset = 0
-        collected: List[dict] = []
-        approx_total = 0
+        total = 0
 
         while True:
-            limit = min(page_size, max_total - len(collected))
-            if limit <= 0:
-                break
-
             task = {
                 "target": target,
-                "limit": limit,
+                "limit": page_size,
                 "offset": offset,
+                "order_by": order_by,
             }
-            if order_by:
-                task["order_by"] = order_by
-
-            resp = await self._post("/v3/backlinks/live", [task])
+            resp = await self._post("/v3/backlinks/backlinks/live", [task])
             tasks = resp.get("tasks") or []
             if not tasks:
                 break
-            t = tasks[0] or {}
-            result = t.get("result") or []
-            if not result:
+            t0 = tasks[0] or {}
+            result = (t0.get("result") or [{}])[0]
+            items = result.get("items") or []
+            if total == 0:
+                total = result.get("total_count") or len(items)
+
+            all_items.extend(items)
+            if not items or len(items) < page_size or len(all_items) >= max_total:
                 break
-            r0 = result[0]
-            items = r0.get("items") or []
-            approx_total = r0.get("total_count") or r0.get("total") or approx_total
+            offset += page_size
 
-            if not items:
-                break
+        return all_items[:max_total], total
 
-            collected.extend(items)
-            offset += len(items)
-
-            if len(collected) >= max_total:
-                break
-
-        return collected, approx_total
-
-    async def backlinks_summary(self, target: str) -> dict:
-        """
-        /v3/backlinks/summary/live
-        """
+    async def backlinks_summary(self, target: str) -> Dict[str, Any]:
         task = {"target": target}
         return await self._post("/v3/backlinks/summary/live", [task])
 
@@ -189,40 +176,36 @@ class DataForSEO:
         self,
         target: str,
         limit: int = 10,
-        order_by: Optional[str] = None,
-    ) -> dict:
-        """
-        /v3/backlinks/referring_domains/live
-        """
+        order_by: str = "backlinks,desc",
+    ) -> Dict[str, Any]:
         task = {
             "target": target,
             "limit": limit,
+            "order_by": order_by,
         }
-        if order_by:
-            task["order_by"] = order_by
         return await self._post("/v3/backlinks/referring_domains/live", [task])
 
     async def anchors_live(
         self,
         target: str,
         limit: int = 10,
-        order_by: Optional[str] = None,
-    ) -> dict:
-        """
-        /v3/backlinks/anchors/live
-        """
+        order_by: str = "backlinks,desc",
+    ) -> Dict[str, Any]:
         task = {
             "target": target,
             "limit": limit,
+            "order_by": order_by,
         }
-        if order_by:
-            task["order_by"] = order_by
         return await self._post("/v3/backlinks/anchors/live", [task])
 
-    # ========== ON-PAGE AUDIT ==========
-    async def onpage_instant(self, url: str) -> dict:
+    # ========= ON-PAGE =========
+
+    async def onpage_instant(self, url: str) -> Dict[str, Any]:
         """
         /v3/on_page/instant_pages
         """
-        task = {"url": url}
+        task = {
+            "url": url,
+            "enable_javascript": False,
+        }
         return await self._post("/v3/on_page/instant_pages", [task])
