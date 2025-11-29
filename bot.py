@@ -125,20 +125,34 @@ SERP_LOCATIONS = [
     "Poland",
     "Germany",
     "Sweden",
+    "Norway",
+    "Denmark",
+    "Netherlands",
+    "Czech Republic",
+    "Spain",
+    "France",
+    "Italy",
     "United States",
     "United Kingdom",
     "Canada",
-    "Netherlands",
-    "Spain",
+    "Australia",
+    "New Zealand",
 ]
 
 SERP_LANGUAGES = [
     "Ukrainian",
+    "Russian",
     "Polish",
     "German",
     "Swedish",
-    "English",
+    "Norwegian",
+    "Danish",
+    "Dutch",
+    "Czech",
     "Spanish",
+    "French",
+    "Italian",
+    "English",
 ]
 
 
