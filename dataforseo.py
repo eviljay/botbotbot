@@ -40,6 +40,7 @@ class DataForSEO:
     ) -> Dict[str, Any]:
         """
         /v3/serp/google/organic/live
+         
         """
         task = {
             "keyword": keyword,
@@ -48,7 +49,7 @@ class DataForSEO:
             "se_domain": "google.com",
             "depth": depth,
         }
-        return await self._post("/v3/serp/google/organic/live", [task])
+        return await self._post("/v3/serp/google/organic/live/advanced", [task])
 
     # ========= KEYWORDS DATA (Google Ads) =========
 
