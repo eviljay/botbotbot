@@ -1312,26 +1312,48 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
             await update.message.reply_text(f"Помилка від DataForSEO: {e}")
             return
 
-        tasks = resp.get("tasks") or []
+                tasks = resp.get("tasks") or []
         rows = []
+
         for t in tasks:
             result = t.get("result") or []
             if not result:
                 continue
-            r0 = result[0]
+
+            r0 = result[0] or {}
             items = r0.get("items") or []
             data_block = t.get("data") or {}
-            # у domain_intersection конкуренти сидять у полях target2/3/4,
-            # але для простоти беремо перший з intersections
-            intersections = data_block.get("intersections") or []
-            comp_label = intersections[0] if intersections else "target2"
-            comp_name = data_block.get(comp_label) or "competitor"
+
+            # для кожного таска target2 = конкретний конкурент
+            comp_name = data_block.get("target2") or "competitor"
+
             for it in items:
-                kw = it.get("keyword") or it.get("keyword_text") or ""
-                vol = it.get("search_volume") or it.get("avg_monthly_searches") or ""
-                my_rank = it.get("rank1") or it.get("target_rank") or it.get("rank") or ""
-                comp_rank = it.get("rank2") or ""
+                kw_data = it.get("keyword_data") or {}
+                kw_info = kw_data.get("keyword_info") or {}
+
+                kw = (
+                    kw_data.get("keyword")
+                    or kw_data.get("keyword_text")
+                    or ""
+                )
+                vol = kw_info.get("search_volume") or ""
+
+                first = it.get("first_domain_serp_element") or {}
+                second = it.get("second_domain_serp_element") or {}
+
+                my_rank = (
+                    first.get("rank_group")
+                    or first.get("rank_absolute")
+                    or ""
+                )
+                comp_rank = (
+                    second.get("rank_group")
+                    or second.get("rank_absolute")
+                    or ""
+                )
+
                 rows.append((kw, vol, my_rank, comp_name, comp_rank))
+
 
         if not rows:
             bal_now = get_balance(uid)
@@ -1562,7 +1584,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             # --- GAP (one-line) ---
-            if aw == "gap":
+                       if aw == "gap":
                 comps_raw = opts.get("comps") or opts.get("competitors") or ""
                 competitors = [x.strip() for x in comps_raw.split(",") if x.strip()]
                 if not main or not competitors:
@@ -1581,22 +1603,45 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 tasks = resp.get("tasks") or []
                 rows = []
+
                 for t in tasks:
                     result = t.get("result") or []
                     if not result:
                         continue
-                    r0 = result[0]
+
+                    r0 = result[0] or {}
                     items = r0.get("items") or []
                     data_block = t.get("data") or {}
-                    intersections = data_block.get("intersections") or []
-                    comp_label = intersections[0] if intersections else "target2"
-                    comp_name = data_block.get(comp_label) or "competitor"
+
+                    comp_name = data_block.get("target2") or "competitor"
+
                     for it in items:
-                        kw = it.get("keyword") or it.get("keyword_text") or ""
-                        vol = it.get("search_volume") or it.get("avg_monthly_searches") or ""
-                        my_rank = it.get("rank1") or it.get("target_rank") or it.get("rank") or ""
-                        comp_rank = it.get("rank2") or ""
+                        kw_data = it.get("keyword_data") or {}
+                        kw_info = kw_data.get("keyword_info") or {}
+
+                        kw = (
+                            kw_data.get("keyword")
+                            or kw_data.get("keyword_text")
+                            or ""
+                        )
+                        vol = kw_info.get("search_volume") or ""
+
+                        first = it.get("first_domain_serp_element") or {}
+                        second = it.get("second_domain_serp_element") or {}
+
+                        my_rank = (
+                            first.get("rank_group")
+                            or first.get("rank_absolute")
+                            or ""
+                        )
+                        comp_rank = (
+                            second.get("rank_group")
+                            or second.get("rank_absolute")
+                            or ""
+                        )
+
                         rows.append((kw, vol, my_rank, comp_name, comp_rank))
+
 
                 if not rows:
                     bal_now = get_balance(uid)
