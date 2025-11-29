@@ -1,3 +1,4 @@
+# bot.py
 import os
 import io
 import re
@@ -11,6 +12,7 @@ from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
 from httpx import AsyncClient, ConnectError, HTTPError
+
 from telegram.error import TelegramError
 from telegram import (
     Update,
@@ -38,6 +40,7 @@ from dataforseo import DataForSEO
 # ====== Логи ======
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("bot")
+
 
 # ====== ENV / допоміжні парсери ======
 def _parse_float_env(name: str, default: float) -> float:
@@ -116,6 +119,55 @@ init_db()
 dfs = DataForSEO(DFS_LOGIN, DFS_PASS, DFS_BASE) if DFS_LOGIN and DFS_PASS else None
 
 
+# ====== Списки країн / мов для кнопок SERP/Ideas/GAP ======
+SERP_LOCATIONS = [
+    "Ukraine",
+    "Poland",
+    "Germany",
+    "Sweden",
+    "United States",
+    "United Kingdom",
+    "Canada",
+    "Netherlands",
+    "Spain",
+]
+
+SERP_LANGUAGES = [
+    "Ukrainian",
+    "Polish",
+    "German",
+    "Swedish",
+    "English",
+    "Spanish",
+]
+
+
+def countries_keyboard() -> ReplyKeyboardMarkup:
+    rows = []
+    row: list[KeyboardButton] = []
+    for i, name in enumerate(SERP_LOCATIONS, start=1):
+        row.append(KeyboardButton(name))
+        if i % 3 == 0:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
+
+def languages_keyboard() -> ReplyKeyboardMarkup:
+    rows = []
+    row: list[KeyboardButton] = []
+    for i, name in enumerate(SERP_LANGUAGES, start=1):
+        row.append(KeyboardButton(name))
+        if i % 3 == 0:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
+
 # ====== Утиліти ======
 def main_menu_keyboard(registered: bool) -> ReplyKeyboardMarkup:
     if registered:
@@ -140,75 +192,11 @@ def services_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
-SERP_LOCATIONS = [
-    "Ukraine",
-    "Poland",
-    "Germany",
-    "Sweden",
-    "Norway",
-    "Denmark",
-    "Netherlands",
-    "Czech Republic",
-    "Spain",
-    "France",
-    "Italy",
-    "United States",
-    "United Kingdom",
-    "Canada",
-    "Australia",
-    "New Zealand",
-]
-
-SERP_LANGUAGES = [
-    "Ukrainian",
-    "Russian",
-    "Polish",
-    "German",
-    "Swedish",
-    "Norwegian",
-    "Danish",
-    "Dutch",
-    "Czech",
-    "Spanish",
-    "French",
-    "Italian",
-    "English",
-]
-
-
-def countries_keyboard() -> ReplyKeyboardMarkup:
-    rows = []
-    row: list[KeyboardButton] = []
-    for i, name in enumerate(SERP_LOCATIONS, start=1):
-        row.append(KeyboardButton(name))
-        if i % 3 == 0:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([KeyboardButton("⬅️ Назад")])
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
-
-
-def languages_keyboard() -> ReplyKeyboardMarkup:
-    rows = []
-    row: list[KeyboardButton] = []
-    for i, name in enumerate(SERP_LANGUAGES, start=1):
-        row.append(KeyboardButton(name))
-        if i % 3 == 0:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([KeyboardButton("⬅️ Назад")])
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
-
-
 async def _set_menu_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE, kb: ReplyKeyboardMarkup):
     """
-    Виставляємо Reply-клавіатуру без блимаючого зникання:
-    1) надсилаємо НОВИЙ «тримач» з клавою (невидимий символ у тексті)
-    2) акуратно видаляємо ЛИШЕ ПОПЕРЕДНІЙ тримач (якщо був)
+    Стабільне оновлення нижнього меню:
+    1) надсилаємо «тримач» з невидимим символом і новою клавіатурою
+    2) видаляємо попередній тримач (якщо був)
     """
     chat_id = update.effective_chat.id
     old_id = context.chat_data.get("menu_holder_id")
@@ -287,86 +275,15 @@ def _parse_opts(line: str) -> Tuple[str, dict]:
 
 def _write_backlink_rows(writer: csv.writer, items: List[dict]):
     for it in items:
-        writer.writerow(
-            [
-                (it.get("page_from") or {}).get("url_from") or it.get("url_from"),
-                it.get("url_to"),
-                (it.get("anchor") or "").replace("\n", " ").strip(),
-                it.get("dofollow"),
-                it.get("first_seen"),
-                it.get("last_visited"),
-                it.get("domain_from"),
-            ]
-        )
-
-
-# --- допоміжні для GAP (ranked_keywords) ---
-async def _fetch_ranked_items(domain: str, country: str, language: str, limit: int = 50) -> list[dict]:
-    """Отримати ranked_keywords для домену."""
-    if not dfs:
-        raise RuntimeError("DataForSEO client is not configured")
-    tasks = [
-        {
-            "target": domain,
-            "location_name": country,
-            "language_name": language,
-            "limit": limit,
-            "include_serp_info": False,
-        }
-    ]
-    resp = await dfs.ranked_keywords(tasks)
-    return _extract_first_items(resp)
-
-
-def _kw_from_ranked_item(it: dict) -> str:
-    return it.get("keyword") or it.get("keyword_text") or ""
-
-
-def _rank_from_ranked_item(it: dict) -> Optional[int]:
-    return it.get("rank") or it.get("position") or it.get("rank_group")
-
-
-def _search_volume_from_ranked_item(it: dict) -> Optional[int]:
-    return it.get("search_volume") or it.get("avg_monthly_searches") or it.get("search_volume_avg")
-
-
-async def _compute_gap_rows(target: str, competitors: List[str], country: str, language: str, limit: int = 50):
-    """Повертає список рядків GAP (keyword, vol, our_rank, competitor, competitor_rank)."""
-    rows: list[tuple] = []
-
-    try:
-        our_items = await _fetch_ranked_items(target, country, language, limit)
-    except Exception as e:
-        log.exception("Failed to fetch ranked_keywords for target")
-        raise e
-
-    our_map = {}
-    for it in our_items:
-        kw = _kw_from_ranked_item(it)
-        if not kw:
-            continue
-        our_map[kw.lower()] = _rank_from_ranked_item(it)
-
-    for comp in competitors:
-        try:
-            comp_items = await _fetch_ranked_items(comp, country, language, limit)
-        except Exception as e:
-            log.exception("Failed to fetch ranked_keywords for competitor %s", comp)
-            continue
-
-        for it in comp_items:
-            kw = _kw_from_ranked_item(it)
-            if not kw:
-                continue
-            kwn = kw.lower()
-            if kwn in our_map:
-                continue
-            vol = _search_volume_from_ranked_item(it)
-            comp_rank = _rank_from_ranked_item(it)
-            our_rank = our_map.get(kwn, "")
-            rows.append((kw, vol, our_rank or "-", comp, comp_rank or "-"))
-
-    return rows
+        writer.writerow([
+            (it.get("page_from") or {}).get("url_from") or it.get("url_from"),
+            it.get("url_to"),
+            (it.get("anchor") or "").replace("\n", " ").strip(),
+            it.get("dofollow"),
+            it.get("first_seen"),
+            it.get("last_visited"),
+            it.get("domain_from"),
+        ])
 
 
 # ====== Клавіатури оплати ======
@@ -374,46 +291,41 @@ def _build_topup_amounts_kb(provider: str) -> InlineKeyboardMarkup:
     rows = []
     for amount in TOPUP_OPTIONS:
         credits = int(amount // CREDIT_PRICE_UAH)
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    f"💳 Поповнити {amount}₴ (~{credits} кредитів)",
-                    callback_data=f"topup|{provider}|{amount}",
-                )
-            ]
-        )
+        rows.append([
+            InlineKeyboardButton(
+                f"💳 Поповнити {amount}₴ (~{credits} кредитів)",
+                callback_data=f"topup|{provider}|{amount}"
+            )
+        ])
     rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="topup_providers")])
     return InlineKeyboardMarkup(rows)
 
 
 def _providers_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("💳 LiqPay", callback_data="open_amounts|liqpay")],
-            [InlineKeyboardButton("🏦 WayForPay", callback_data="open_amounts|wayforpay")],
-        ]
-    )
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 LiqPay", callback_data="open_amounts|liqpay")],
+        [InlineKeyboardButton("🏦 WayForPay", callback_data="open_amounts|wayforpay")],
+    ])
 
 
 # ====== Сервіси (інлайн-меню) ======
 def _services_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🔍 Топ-10 Google (SERP)", callback_data="svc|serp")],
-            [InlineKeyboardButton("🧠 Ідеї ключових + обсяг/CPC", callback_data="svc|keywords")],
-            [InlineKeyboardButton("⚔️ Keyword Gap", callback_data="svc|gap")],
-            [InlineKeyboardButton("🔗 Backlinks огляд", callback_data="svc|backlinks_ov")],
-            [InlineKeyboardButton("🛠️ Аудит URL (On-Page)", callback_data="svc|audit")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="services_back")],
-        ]
-    )
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 Топ-10 Google (SERP)", callback_data="svc|serp")],
+        [InlineKeyboardButton("🧠 Ідеї ключових + обсяг/CPC", callback_data="svc|keywords")],
+        [InlineKeyboardButton("⚔️ Keyword Gap", callback_data="svc|gap")],
+        [InlineKeyboardButton("🔗 Backlinks огляд", callback_data="svc|backlinks_ov")],
+        [InlineKeyboardButton("🛠️ Аудит URL (On-Page)", callback_data="svc|audit")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="services_back")],
+    ])
 
 
 async def services_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "🧰 *Сервіси*\n\nОбери інструмент. "
-        "Після кліку надішліть дані в одному рядку з опціями через `|`.\n\n"
-        "Приклади:\n"
+        "Можна або діалоговий режим через кнопки (SERP/Ideas/Gap), "
+        "або разовий запуск, надіславши параметри в одному рядку з опціями через `|`.\n\n"
+        "Приклади one-line:\n"
         "• SERP: `iphone 13 | country=Ukraine | lang=Ukrainian | depth=10`\n"
         "• Ідеї ключових: `seo tools | country=Ukraine | lang=Ukrainian | limit=20`\n"
         "• Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50`\n"
@@ -455,7 +367,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text(
             "Дякуємо! Якщо платіж пройшов, баланс оновиться протягом хвилини.\n"
             "Перевірте /balance або натисніть «📊 Баланс».",
-            reply_markup=main_menu_keyboard(reg),
+            reply_markup=main_menu_keyboard(reg)
         )
         context.chat_data["menu_msg_id"] = msg.message_id
         context.chat_data["in_services"] = False
@@ -491,15 +403,12 @@ async def register_cmd_or_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     ensure_user(uid)
 
     if _registered(uid):
-        return await update.message.reply_text(
-            "Ви вже зареєстровані ✅",
-            reply_markup=main_menu_keyboard(True),
-        )
+        return await update.message.reply_text("Ви вже зареєстровані ✅", reply_markup=main_menu_keyboard(True))
 
     kb = [[KeyboardButton("📱 Поділитись номером", request_contact=True)]]
     await update.message.reply_text(
         "Натисніть кнопку, щоб поділитися **своїм** номером телефону:",
-        reply_markup=ReplyKeyboardMarkup(kb, one_time_keyboard=True, resize_keyboard=True),
+        reply_markup=ReplyKeyboardMarkup(kb, one_time_keyboard=True, resize_keyboard=True)
     )
     return WAIT_PHONE
 
@@ -529,10 +438,7 @@ async def on_contact_register(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def cancel_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Скасовано.",
-        reply_markup=main_menu_keyboard(_registered(update.effective_user.id)),
-    )
+    await update.message.reply_text("Скасовано.", reply_markup=main_menu_keyboard(_registered(update.effective_user.id)))
     return ConversationHandler.END
 
 
@@ -569,10 +475,7 @@ async def open_amounts(update: Update, context: ContextTypes.DEFAULT_TYPE, provi
 async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = update.message.text.split()[1:]
     if not args:
-        return await update.message.reply_text(
-            "Приклад: `/backlinks yourdomain.com`",
-            parse_mode="Markdown",
-        )
+        return await update.message.reply_text("Приклад: `/backlinks yourdomain.com`", parse_mode="Markdown")
     domain = args[0].strip()
 
     kb = [
@@ -609,26 +512,32 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cmd = parts[0]
 
-    # --- Сервіси (вхід у wizard) ---
+    # --- Сервіси (вхід у wizard або діалогові флоу) ---
     if cmd == "svc":
         tool = parts[1] if len(parts) > 1 else ""
-        context.user_data["await_tool"] = tool
-        prompts = {
-            "serp": "🔍 SERP: введіть запит. Опційно: `| country=Ukraine | lang=Ukrainian | depth=10`",
-            "keywords": "🧠 Ідеї ключових: введіть seed. Опційно: `| country=Ukraine | lang=Ukrainian | limit=20`",
-            "gap": "⚔️ Gap: `mydomain.com | comps=site1.com,site2.com | country=Ukraine | lang=Ukrainian | limit=50`",
-            "backlinks_ov": "🔗 Backlinks огляд: введіть домен: `mydomain.com`",
-            "audit": "🛠️ Аудит: введіть URL: `https://example.com/page`",
-        }
-        text = prompts.get(tool, "Надішліть параметри в одному рядку.")
-        return await query.edit_message_text(text, disable_web_page_preview=True, parse_mode="Markdown")
-
-    if cmd == "services_back":
-        try:
-            await query.edit_message_text("Меню сервісів закрито.")
-        except Exception:
-            pass
-        return
+        # SERP / Keywords / Gap мають окремий діалоговий флоу через нижні кнопки,
+        # тут залишаємо only one-line режим для Backlinks/Audit
+        if tool in ("backlinks_ov", "audit"):
+            context.user_data["await_tool"] = tool
+            prompts = {
+                "backlinks_ov": "🔗 Backlinks огляд: введіть домен: `mydomain.com`",
+                "audit": "🛠️ Аудит: введіть URL: `https://example.com/page`",
+            }
+            text = prompts.get(tool, "Надішліть параметри в одному рядку.")
+            return await query.edit_message_text(
+                text,
+                disable_web_page_preview=True,
+                parse_mode="Markdown",
+            )
+        else:
+            # Підказка: користувач може натиснути нижню кнопку «🔍 SERP» / «🧠 Keyword Ideas» / «⚔️ Gap»
+            txt = (
+                "Для цього інструменту краще скористайтесь нижніми кнопками меню:\n"
+                "🔍 SERP / 🧠 Keyword Ideas / ⚔️ Gap.\n\n"
+                "Або надішліть one-line формат:\n"
+                "`keyword | country=Ukraine | lang=Ukrainian | depth=10`"
+            )
+            return await query.edit_message_text(txt, parse_mode="Markdown")
 
     # --- Екран вибору провайдера / повернення ---
     if cmd == "topup_providers":
@@ -658,7 +567,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             async with AsyncClient(timeout=20) as c:
                 r = await c.post(
                     f"{BACKEND_BASE}/api/payments/create",
-                    json={"user_id": uid, "amount": amount_uah, "provider": provider},
+                    json={"user_id": uid, "amount": amount_uah, "provider": provider}
                 )
                 r.raise_for_status()
                 resp = r.json()
@@ -692,11 +601,9 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"💳 Оплатити ({label})", url=pay_url)]])
         await context.bot.send_message(
             chat_id=uid,
-            text=(
-                f"Рахунок створено на {amount_uah}₴ ({label}).\n"
-                f"Натисніть кнопку нижче або відкрийте лінк:\n{pay_url}"
-            ),
-            reply_markup=kb,
+            text=(f"Рахунок створено на {amount_uah}₴ ({label}).\n"
+                  f"Натисніть кнопку нижче або відкрийте лінк:\n{pay_url}"),
+            reply_markup=kb
         )
         try:
             await query.edit_message_text("Рахунок створено, дивись повідомлення з кнопкою нижче ⬇️")
@@ -726,9 +633,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 items = _extract_first_items(data_resp)
                 if not items:
                     bal_now = get_balance(uid)
-                    return await query.edit_message_text(
-                        f"Нічого не знайшов 😕\nВаш новий баланс: {bal_now} кредитів"
-                    )
+                    return await query.edit_message_text(f"Нічого не знайшов 😕\nВаш новий баланс: {bal_now} кредитів")
 
                 if cmd == "show":
                     cap = PREVIEW_COUNT if scope == "10" else min(50, len(items))
@@ -747,35 +652,25 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     buf = io.StringIO()
                     w = csv.writer(buf)
-                    w.writerow(
-                        ["url_from", "url_to", "anchor", "dofollow", "first_seen", "last_seen", "domain_from"]
-                    )
+                    w.writerow(["url_from", "url_to", "anchor", "dofollow", "first_seen", "last_seen", "domain_from"])
                     _write_backlink_rows(w, items)
                     csv_bytes = buf.getvalue().encode()
                     bal_now = get_balance(uid)
                     await query.message.reply_document(
-                        document=InputFile(
-                            io.BytesIO(csv_bytes),
-                            filename=f"{domain}_backlinks_{scope}.csv",
-                        ),
-                        caption=f"Експорт для {domain} ({scope})\n💰 Списано {need_credits}. Новий баланс: {bal_now}",
+                        document=InputFile(io.BytesIO(csv_bytes), filename=f"{domain}_backlinks_{scope}.csv"),
+                        caption=f"Експорт для {domain} ({scope})\n💰 Списано {need_credits}. Новий баланс: {bal_now}"
                     )
                     await query.edit_message_text("Готово ✅")
                 return
 
             # повний експорт
             items_all, total = await dfs.backlinks_all(
-                domain,
-                order_by="first_seen,desc",
-                page_size=BACKLINKS_PAGE_SIZE,
-                max_total=MAX_BACKLINKS_EXPORT,
+                domain, order_by="first_seen,desc", page_size=BACKLINKS_PAGE_SIZE, max_total=MAX_BACKLINKS_EXPORT
             )
             count = len(items_all)
             if count == 0:
                 bal_now = get_balance(uid)
-                return await query.edit_message_text(
-                    f"Нічого не знайшов 😕\nВаш новий баланс: {bal_now} кредитів"
-                )
+                return await query.edit_message_text(f"Нічого не знайшов 😕\nВаш новий баланс: {bal_now} кредитів")
 
             if count > BACKLINKS_PART_ROWS:
                 zip_buf = io.BytesIO()
@@ -783,20 +678,10 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     start = 0
                     part = 1
                     while start < count:
-                        chunk = items_all[start : start + BACKLINKS_PART_ROWS]
+                        chunk = items_all[start:start + BACKLINKS_PART_ROWS]
                         tmp_io = io.StringIO()
                         w = csv.writer(tmp_io)
-                        w.writerow(
-                            [
-                                "url_from",
-                                "url_to",
-                                "anchor",
-                                "dofollow",
-                                "first_seen",
-                                "last_seen",
-                                "domain_from",
-                            ]
-                        )
+                        w.writerow(["url_from", "url_to", "anchor", "dofollow", "first_seen", "last_seen", "domain_from"])
                         _write_backlink_rows(w, chunk)
                         zf.writestr(f"{domain}_backlinks_part{part}.csv", tmp_io.getvalue())
                         start += BACKLINKS_PART_ROWS
@@ -804,36 +689,24 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 zip_bytes = zip_buf.getvalue()
                 bal_now = get_balance(uid)
                 await query.message.reply_document(
-                    document=InputFile(
-                        io.BytesIO(zip_bytes),
-                        filename=f"{domain}_backlinks_full.zip",
-                    ),
-                    caption=(
-                        f"Повний експорт для {domain}: {count} рядків (із ~{total}). "
-                        f"ZIP з частинами по {BACKLINKS_PART_ROWS}.\n"
-                        f"💰 Списано {need_credits}. Баланс: {bal_now}"
-                    ),
+                    document=InputFile(io.BytesIO(zip_bytes), filename=f"{domain}_backlinks_full.zip"),
+                    caption=(f"Повний експорт для {domain}: {count} рядків (із ~{total}). "
+                             f"ZIP з частинами по {BACKLINKS_PART_ROWS}.\n"
+                             f"💰 Списано {need_credits}. Баланс: {bal_now}")
                 )
                 await query.edit_message_text("Готово ✅")
                 return
             else:
                 buf = io.StringIO()
                 w = csv.writer(buf)
-                w.writerow(
-                    ["url_from", "url_to", "anchor", "dofollow", "first_seen", "last_seen", "domain_from"]
-                )
+                w.writerow(["url_from", "url_to", "anchor", "dofollow", "first_seen", "last_seen", "domain_from"])
                 _write_backlink_rows(w, items_all)
                 csv_bytes = buf.getvalue().encode()
                 bal_now = get_balance(uid)
                 await query.message.reply_document(
-                    document=InputFile(
-                        io.BytesIO(csv_bytes),
-                        filename=f"{domain}_backlinks_full.csv",
-                    ),
-                    caption=(
-                        f"Повний експорт для {domain}: {count} рядків (із ~{total}).\n"
-                        f"💰 Списано {need_credits}. Баланс: {bal_now}"
-                    ),
+                    document=InputFile(io.BytesIO(csv_bytes), filename=f"{domain}_backlinks_full.csv"),
+                    caption=(f"Повний експорт для {domain}: {count} рядків (із ~{total}).\n"
+                             f"💰 Списано {need_credits}. Баланс: {bal_now}")
                 )
                 await query.edit_message_text("Готово ✅")
                 return
@@ -846,6 +719,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"Помилка: {e}")
         return
 
+    # --- Невідома кнопка ---
     try:
         return await query.edit_message_text("Кнопка застаріла або формат невірний. Відкрийте меню ще раз.")
     except Exception:
@@ -855,7 +729,6 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============ ДІАЛОГОВІ ФЛОУ ДЛЯ SERP / KEYWORD IDEAS / GAP ============
 
 async def _start_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Почати діалоговий SERP-флоу."""
     context.user_data["serp_state"] = "keyword"
     context.user_data["serp_params"] = {}
     context.user_data.pop("await_tool", None)
@@ -866,7 +739,6 @@ async def _start_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
-    """State-machine для SERP: keyword → country → language → depth."""
     uid = update.effective_user.id
     state = context.user_data.get("serp_state")
     params = context.user_data.get("serp_params") or {}
@@ -880,6 +752,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         )
         return
 
+    # keyword
     if state == "keyword":
         kw = text.strip()
         if not kw:
@@ -894,6 +767,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         )
         return
 
+    # country
     if state == "country":
         if text not in SERP_LOCATIONS:
             await update.message.reply_text(
@@ -910,6 +784,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         )
         return
 
+    # language
     if state == "language":
         if text not in SERP_LANGUAGES:
             await update.message.reply_text(
@@ -929,6 +804,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         )
         return
 
+    # depth + запуск
     if state == "depth":
         try:
             depth = int(text)
@@ -975,7 +851,10 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         items = _extract_first_items(resp)
         if not items:
             bal_now = get_balance(uid)
-            await update.message.reply_text(f"Нічого не знайшов 😕\nБаланс: {bal_now}")
+            await update.message.reply_text(
+                f"Нічого не знайшов 😕\nБаланс: {bal_now}",
+                reply_markup=services_menu_keyboard(),
+            )
             return
 
         lines = []
@@ -992,19 +871,17 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         w = csv.writer(buf)
         w.writerow(["rank", "title", "url", "type"])
         for it in items:
-            w.writerow(
-                [
-                    it.get("rank_group") or it.get("rank_absolute") or it.get("rank"),
-                    it.get("title") or it.get("domain") or "",
-                    it.get("url") or it.get("link") or "",
-                    it.get("type") or it.get("serp_item_type") or "",
-                ]
-            )
+            w.writerow([
+                it.get("rank_group") or it.get("rank_absolute") or it.get("rank"),
+                it.get("title") or it.get("domain") or "",
+                it.get("url") or it.get("link") or "",
+                it.get("type") or it.get("serp_item_type") or "",
+            ])
         csv_bytes = buf.getvalue().encode()
 
         bal_now = get_balance(uid)
         await update.message.reply_text(
-            preview + f"\n\nСписано {need_credits} кредитів. Баланс: {bal_now}",
+            preview + f"\n\n💰 Списано {need_credits}. Баланс: {bal_now}",
             parse_mode="Markdown",
             reply_markup=services_menu_keyboard(),
         )
@@ -1039,6 +916,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    # keyword
     if state == "keyword":
         kw = text.strip()
         if not kw:
@@ -1053,6 +931,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    # country
     if state == "country":
         if text not in SERP_LOCATIONS:
             await update.message.reply_text(
@@ -1069,6 +948,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    # language
     if state == "language":
         if text not in SERP_LANGUAGES:
             await update.message.reply_text(
@@ -1088,6 +968,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    # limit + запуск
     if state == "limit":
         try:
             limit = int(text)
@@ -1130,7 +1011,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
                 kw,
                 location_name=country,
                 language_name=language,
-                limit=limit,
+                limit=limit,  # обрізання робимо вже в боті
             )
         except Exception as e:
             log.exception("KW ideas request failed")
@@ -1140,11 +1021,16 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         items = _extract_first_items(resp)
         if not items:
             bal_now = get_balance(uid)
-            await update.message.reply_text(f"Нічого не знайшов 😕\nБаланс: {bal_now}")
+            await update.message.reply_text(
+                f"Нічого не знайшов 😕\nБаланс: {bal_now}",
+                reply_markup=services_menu_keyboard(),
+            )
             return
 
+        items_limited = items[:limit]
+
         lines = []
-        for it in items[:10]:
+        for it in items_limited[:10]:
             kw_i = it.get("keyword") or it.get("keyword_text") or "—"
             vol = (
                 it.get("search_volume")
@@ -1159,22 +1045,17 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(["keyword", "search_volume", "cpc"])
-        for it in items:
-            w.writerow(
-                [
-                    it.get("keyword") or it.get("keyword_text") or "",
-                    it.get("search_volume")
-                    or it.get("avg_monthly_searches")
-                    or it.get("search_volume_avg")
-                    or "",
-                    it.get("cpc") or it.get("cost_per_click") or "",
-                ]
-            )
+        for it in items_limited:
+            w.writerow([
+                it.get("keyword") or it.get("keyword_text") or "",
+                it.get("search_volume") or it.get("avg_monthly_searches") or it.get("search_volume_avg") or "",
+                it.get("cpc") or it.get("cost_per_click") or "",
+            ])
         csv_bytes = buf.getvalue().encode()
 
         bal_now = get_balance(uid)
         await update.message.reply_text(
-            preview + f"\n\nСписано {need_credits} кредитів. Баланс: {bal_now}",
+            preview + f"\n\n💰 Списано {need_credits}. Баланс: {bal_now}",
             parse_mode="Markdown",
             reply_markup=services_menu_keyboard(),
         )
@@ -1210,6 +1091,7 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         )
         return
 
+    # target
     if state == "target":
         target = text.strip()
         if not target:
@@ -1227,6 +1109,7 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         )
         return
 
+    # competitors
     if state == "competitors":
         raw = text.strip()
         if not raw:
@@ -1248,6 +1131,7 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         )
         return
 
+    # country
     if state == "country":
         if text not in SERP_LOCATIONS:
             await update.message.reply_text(
@@ -1264,6 +1148,7 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         )
         return
 
+    # language + запуск
     if state == "language":
         if text not in SERP_LANGUAGES:
             await update.message.reply_text(
@@ -1302,32 +1187,71 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         )
 
         try:
-            rows = await _compute_gap_rows(target, competitors, country, language, limit=50)
+            resp = await dfs.keywords_gap(
+                target,
+                competitors,
+                location_name=country,
+                language_name=language,
+                limit=50,
+            )
         except Exception as e:
             log.exception("GAP request failed")
             await update.message.reply_text(f"Помилка від DataForSEO: {e}")
             return
 
+        tasks = resp.get("tasks") or []
+        rows = []
+        for t in tasks:
+            result = t.get("result") or []
+            if not result:
+                continue
+            r0 = result[0]
+            items = r0.get("items") or []
+            data_block = t.get("data") or {}
+            comp_list = data_block.get("competitors") or data_block.get("targets") or ["competitor"]
+            comp_name = comp_list[0] if isinstance(comp_list, list) and comp_list else "competitor"
+            for it in items:
+                kw = it.get("keyword") or it.get("keyword_text") or ""
+                vol = it.get("search_volume") or it.get("avg_monthly_searches") or ""
+                my_rank = it.get("target_rank") or it.get("rank") or ""
+                comp_ranks = it.get("competitor_ranks") or it.get("ranks") or {}
+                rows.append((kw, vol, my_rank, comp_name, comp_ranks))
+
         if not rows:
             bal_now = get_balance(uid)
-            await update.message.reply_text(f"Нічого не знайшов 😕\nБаланс: {bal_now}")
+            await update.message.reply_text(
+                f"Нічого не знайшов 😕\nБаланс: {bal_now}",
+                reply_markup=services_menu_keyboard(),
+            )
             return
 
         lines = []
-        for kw, vol, my, comp_name, comp_rank in rows[:10]:
-            lines.append(f"• {kw} — vol:{vol}, ми:{my}, vs {comp_name}: rank {comp_rank}")
+        for kw, vol, my, comp_name, comp_ranks in rows[:10]:
+            if isinstance(comp_ranks, dict):
+                comp_str = ", ".join(f"{k}:{v}" for k, v in comp_ranks.items())
+            elif isinstance(comp_ranks, list):
+                comp_str = ", ".join(str(x) for x in comp_ranks[:3])
+            else:
+                comp_str = "-"
+            lines.append(f"• {kw} — vol:{vol}, ми:{my}, vs {comp_name}: {comp_str}")
         preview = "⚔️ *Keyword Gap*\n" + "\n".join(lines)
 
         buf = io.StringIO()
         w = csv.writer(buf)
-        w.writerow(["keyword", "search_volume", "our_rank", "competitor", "competitor_rank"])
-        for kw, vol, my, comp_name, comp_rank in rows:
-            w.writerow([kw, vol, my, comp_name, comp_rank])
+        w.writerow(["keyword", "search_volume", "our_rank", "competitor", "competitor_ranks"])
+        for kw, vol, my, comp_name, comp_ranks in rows:
+            if isinstance(comp_ranks, dict):
+                comp_str = "; ".join(f"{k}:{v}" for k, v in comp_ranks.items())
+            elif isinstance(comp_ranks, list):
+                comp_str = "; ".join(str(x) for x in comp_ranks)
+            else:
+                comp_str = ""
+            w.writerow([kw, vol, my, comp_name, comp_str])
         csv_bytes = buf.getvalue().encode()
 
         bal_now = get_balance(uid)
         await update.message.reply_text(
-            preview + f"\n\nСписано {need_credits} кредитів. Баланс: {bal_now}",
+            preview + f"\n\n💰 Списано {need_credits}. Баланс: {bal_now}",
             parse_mode="Markdown",
             reply_markup=services_menu_keyboard(),
         )
@@ -1338,11 +1262,13 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         return
 
 
-# ====== Обробка меню (reply-клавіатура) + логіка Сервісів ======
+# ============ on_menu_text з урахуванням нових флоу ============
+
 async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     uid = update.effective_user.id
 
+    # Якщо активний SERP / Ideas / GAP — обробляємо state-machine
     if context.user_data.get("serp_state"):
         await _handle_serp_flow(update, context, text)
         return
@@ -1355,20 +1281,18 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_gap_flow(update, context, text)
         return
 
+    # Перемикач нижніх меню
     if text in ("🧰 Сервіси", "Сервіси"):
         context.chat_data["in_services"] = True
         await _set_menu_keyboard(update, context, services_menu_keyboard())
         return
 
-    if text == "⬅️ Назад" and not (
-        context.user_data.get("serp_state")
-        or context.user_data.get("kwideas_state")
-        or context.user_data.get("gap_state")
-    ):
+    if text == "⬅️ Назад":
         context.chat_data["in_services"] = False
         await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(uid)))
         return
 
+    # Швидкий вибір сервісу (reply-кнопки)
     if text in ("🔍 SERP", "🧠 Keyword Ideas", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
         if text == "🔍 SERP":
             await _start_serp_flow(update, context)
@@ -1389,10 +1313,11 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
             parse_mode="Markdown",
-            reply_markup=services_menu_keyboard(),
+            reply_markup=services_menu_keyboard()
         )
         return
 
+    # One-line wizard для Backlinks/Audit (та старого формату)
     aw = context.user_data.get("await_tool")
     if aw:
         context.user_data.pop("await_tool", None)
@@ -1422,15 +1347,17 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         try:
+            # SERP / Keywords / Gap залишилися для сумісності, але основний юз-кейс у флоу вище
             if aw == "serp":
                 depth = int(re.findall(r"\d+", opts.get("depth", "10"))[0]) if opts.get("depth") else 10
-                resp = await dfs.serp_google_organic(
-                    main, location_name=country, language_name=lang, depth=depth
-                )
+                resp = await dfs.serp_google_organic(main, location_name=country, language_name=lang, depth=depth)
                 items = _extract_first_items(resp)
                 if not items:
                     bal_now = get_balance(uid)
-                    return await update.message.reply_text(f"Нічого не знайшов 😕\nБаланс: {bal_now}")
+                    return await update.message.reply_text(
+                        f"Нічого не знайшов 😕\nБаланс: {bal_now}",
+                        reply_markup=services_menu_keyboard(),
+                    )
 
                 lines = []
                 for it in items[:10]:
@@ -1446,14 +1373,12 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 w = csv.writer(buf)
                 w.writerow(["rank", "title", "url", "type"])
                 for it in items:
-                    w.writerow(
-                        [
-                            it.get("rank_group") or it.get("rank_absolute") or it.get("rank"),
-                            it.get("title") or it.get("domain") or "",
-                            it.get("url") or it.get("link") or "",
-                            it.get("type") or it.get("serp_item_type") or "",
-                        ]
-                    )
+                    w.writerow([
+                        it.get("rank_group") or it.get("rank_absolute") or it.get("rank"),
+                        it.get("title") or it.get("domain") or "",
+                        it.get("url") or it.get("link") or "",
+                        it.get("type") or it.get("serp_item_type") or "",
+                    ])
                 csv_bytes = buf.getvalue().encode()
 
                 bal_now = get_balance(uid)
@@ -1464,21 +1389,29 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 await update.message.reply_document(
                     document=InputFile(io.BytesIO(csv_bytes), filename="serp_top.csv"),
-                    caption="CSV із результатами SERP",
+                    caption="CSV із результатами SERP"
                 )
                 return
 
             if aw == "keywords":
                 resp = await dfs.keywords_for_keywords(
-                    main, location_name=country, language_name=lang, limit=limit
+                    main,
+                    location_name=country,
+                    language_name=lang,
+                    limit=limit,
                 )
                 items = _extract_first_items(resp)
                 if not items:
                     bal_now = get_balance(uid)
-                    return await update.message.reply_text(f"Нічого не знайшов 😕\nБаланс: {bal_now}")
+                    return await update.message.reply_text(
+                        f"Нічого не знайшов 😕\nБаланс: {bal_now}",
+                        reply_markup=services_menu_keyboard(),
+                    )
+
+                items_limited = items[:limit]
 
                 lines = []
-                for it in items[:10]:
+                for it in items_limited[:10]:
                     kw = it.get("keyword") or it.get("keyword_text") or "—"
                     vol = (
                         it.get("search_volume")
@@ -1493,17 +1426,12 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 buf = io.StringIO()
                 w = csv.writer(buf)
                 w.writerow(["keyword", "search_volume", "cpc"])
-                for it in items:
-                    w.writerow(
-                        [
-                            it.get("keyword") or it.get("keyword_text") or "",
-                            it.get("search_volume")
-                            or it.get("avg_monthly_searches")
-                            or it.get("search_volume_avg")
-                            or "",
-                            it.get("cpc") or it.get("cost_per_click") or "",
-                        ]
-                    )
+                for it in items_limited:
+                    w.writerow([
+                        it.get("keyword") or it.get("keyword_text") or "",
+                        it.get("search_volume") or it.get("avg_monthly_searches") or it.get("search_volume_avg") or "",
+                        it.get("cpc") or it.get("cost_per_click") or "",
+                    ])
                 csv_bytes = buf.getvalue().encode()
 
                 bal_now = get_balance(uid)
@@ -1514,7 +1442,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 await update.message.reply_document(
                     document=InputFile(io.BytesIO(csv_bytes), filename="keyword_ideas.csv"),
-                    caption="CSV з ідеями ключових",
+                    caption="CSV з ідеями ключових"
                 )
                 return
 
@@ -1527,27 +1455,66 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="Markdown",
                     )
 
+                rows = []
                 try:
-                    rows = await _compute_gap_rows(main, competitors, country, lang, limit=limit)
+                    resp = await dfs.keywords_gap(
+                        main,
+                        competitors,
+                        location_name=country,
+                        language_name=lang,
+                        limit=limit,
+                    )
                 except Exception as e:
                     log.exception("GAP request failed (wizard)")
                     await update.message.reply_text(f"Помилка від DataForSEO: {e}")
                     return
 
+                tasks = resp.get("tasks") or []
+                for t in tasks:
+                    result = t.get("result") or []
+                    if not result:
+                        continue
+                    r0 = result[0]
+                    items = r0.get("items") or []
+                    data_block = t.get("data") or {}
+                    comp_list = data_block.get("competitors") or data_block.get("targets") or ["competitor"]
+                    comp_name = comp_list[0] if isinstance(comp_list, list) and comp_list else "competitor"
+                    for it in items:
+                        kw = it.get("keyword") or it.get("keyword_text") or ""
+                        vol = it.get("search_volume") or it.get("avg_monthly_searches") or ""
+                        my_rank = it.get("target_rank") or it.get("rank") or ""
+                        comp_ranks = it.get("competitor_ranks") or it.get("ranks") or {}
+                        rows.append((kw, vol, my_rank, comp_name, comp_ranks))
+
                 if not rows:
                     bal_now = get_balance(uid)
-                    return await update.message.reply_text(f"Нічого не знайшов 😕\nБаланс: {bal_now}")
+                    return await update.message.reply_text(
+                        f"Нічого не знайшов 😕\nБаланс: {bal_now}",
+                        reply_markup=services_menu_keyboard(),
+                    )
 
                 lines = []
-                for kw, vol, my, comp_name, comp_rank in rows[:10]:
-                    lines.append(f"• {kw} — vol:{vol}, ми:{my}, vs {comp_name}: rank {comp_rank}")
+                for kw, vol, my, comp_name, comp_ranks in rows[:10]:
+                    if isinstance(comp_ranks, dict):
+                        comp_str = ", ".join(f"{k}:{v}" for k, v in comp_ranks.items())
+                    elif isinstance(comp_ranks, list):
+                        comp_str = ", ".join(str(x) for x in comp_ranks[:3])
+                    else:
+                        comp_str = "-"
+                    lines.append(f"• {kw} — vol:{vol}, ми:{my}, vs {comp_name}: {comp_str}")
                 preview = "⚔️ *Keyword Gap*\n" + "\n".join(lines)
 
                 buf = io.StringIO()
                 w = csv.writer(buf)
-                w.writerow(["keyword", "search_volume", "our_rank", "competitor", "competitor_rank"])
-                for kw, vol, my, comp_name, comp_rank in rows:
-                    w.writerow([kw, vol, my, comp_name, comp_rank])
+                w.writerow(["keyword", "search_volume", "our_rank", "competitor", "competitor_ranks"])
+                for kw, vol, my, comp_name, comp_ranks in rows:
+                    if isinstance(comp_ranks, dict):
+                        comp_str = "; ".join(f"{k}:{v}" for k, v in comp_ranks.items())
+                    elif isinstance(comp_ranks, list):
+                        comp_str = "; ".join(str(x) for x in comp_ranks)
+                    else:
+                        comp_str = ""
+                    w.writerow([kw, vol, my, comp_name, comp_str])
                 csv_bytes = buf.getvalue().encode()
 
                 bal_now = get_balance(uid)
@@ -1558,10 +1525,11 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 await update.message.reply_document(
                     document=InputFile(io.BytesIO(csv_bytes), filename="keyword_gap.csv"),
-                    caption="CSV з результатами Keyword Gap",
+                    caption="CSV з результатами Keyword Gap"
                 )
                 return
 
+            # Backlinks Overview
             if aw == "backlinks_ov":
                 target = main
                 summary = await dfs.backlinks_summary(target)
@@ -1596,11 +1564,13 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"• Referring domains: {refdomains}\n"
                     f"• Dofollow: {dofollow} | Nofollow: {nofollow}\n\n"
                     f"Топ реф.доменів:\n" + ("\n".join(rd_lines) or "—") + "\n\n"
-                    f"Топ анкорів:\n" + ("\n".join(a_lines) or "—") + f"\n\n💰 Списано {need_credits}. Баланс: {bal_now}"
+                    f"Топ анкорів:\n" + ("\n".join(a_lines) or "—") +
+                    f"\n\n💰 Списано {need_credits}. Баланс: {bal_now}"
                 )
-                await update.message.reply_text(txt, parse_mode="Markdown")
+                await update.message.reply_text(txt, parse_mode="Markdown", reply_markup=services_menu_keyboard())
                 return
 
+            # Audit URL
             if aw == "audit":
                 url = main
                 res = await dfs.onpage_instant(url)
@@ -1627,7 +1597,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 h2 = _norm_h(meta.get("h2") or content.get("h2"))
 
                 lines = [
-                    "🛠️ *Аудит URL*",
+                    f"🛠️ *Аудит URL*",
                     f"URL: {url}",
                     f"Статус: {status}",
                     f"Title: {title[:160]}",
@@ -1638,11 +1608,14 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
                 bal_now = get_balance(uid)
                 lines.append(f"\n💰 Списано {need_credits}. Баланс: {bal_now}")
-                await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+                await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=services_menu_keyboard())
                 return
 
             bal_now = get_balance(uid)
-            return await update.message.reply_text(f"Інструмент поки не реалізовано. Баланс: {bal_now}")
+            return await update.message.reply_text(
+                f"Інструмент поки не реалізовано. Баланс: {bal_now}",
+                reply_markup=services_menu_keyboard(),
+            )
 
         except HTTPError as e:
             log.exception("DataForSEO HTTP error")
@@ -1651,6 +1624,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             log.exception("Unexpected error")
             return await update.message.reply_text(f"Помилка: {e}")
 
+    # Стандартні пункти меню
     if text == "🧰 Сервіси":
         return await services_menu(update, context)
     if text == "💳 Поповнити":
@@ -1659,10 +1633,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await balance(update, context)
     if text == "📱 Реєстрація":
         if _registered(uid):
-            return await update.message.reply_text(
-                "Ви вже зареєстровані ✅",
-                reply_markup=main_menu_keyboard(True),
-            )
+            return await update.message.reply_text("Ви вже зареєстровані ✅", reply_markup=main_menu_keyboard(True))
         return await register_cmd_or_menu(update, context)
 
 
@@ -1690,7 +1661,6 @@ def _render_users_page(page: int) -> str:
         return "Користувачів ще немає."
 
     import math as _math
-
     lines = [f"👤 Користувачі (всього: {total}) | сторінка {page}/{max(1, _math.ceil(total / PAGE_SIZE))}"]
     for uid, bal, phone in rows:
         phone_disp = phone if phone else "—"
@@ -1702,7 +1672,7 @@ def _admin_kb(page: int) -> InlineKeyboardMarkup:
     buttons = [InlineKeyboardButton("⬅️ Назад", callback_data=f"admin|page|{page-1}")] if page > 1 else []
     buttons += [
         InlineKeyboardButton("↻ Оновити", callback_data=f"admin|page|{page}"),
-        InlineKeyboardButton("Вперед ➡️", callback_data=f"admin|page|{page+1}"),
+        InlineKeyboardButton("Вперед ➡️", callback_data=f"admin|page|{page+1}")
     ]
     return InlineKeyboardMarkup([buttons])
 
@@ -1735,11 +1705,13 @@ async def on_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
+    # Команди
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("topup", topup_providers))
     app.add_handler(CommandHandler("backlinks", backlinks))
 
+    # Реєстрація — розмова
     reg_conv = ConversationHandler(
         entry_points=[
             CommandHandler("register", register_cmd_or_menu),
@@ -1751,16 +1723,17 @@ def main():
     )
     app.add_handler(reg_conv)
 
+    # Адмінка
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(on_admin_cb, pattern=r"^admin\|"))
 
-    app.add_handler(
-        CallbackQueryHandler(
-            on_choice,
-            pattern=r"^(svc\|.*|services_back|topup.*|open_amounts\|.*|topup_providers|show\|.*|csv\|.*)$",
-        )
-    )
+    # Сервіси + поповнення + беклінки
+    app.add_handler(CallbackQueryHandler(
+        on_choice,
+        pattern=r"^(svc\|.*|services_back|topup.*|open_amounts\|.*|topup_providers|show\|.*|csv\|.*)$"
+    ))
 
+    # Меню-тексти / ввід для сервісів
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_menu_text))
 
     log.info("Bot started. DFS_BASE=%s BACKEND_BASE=%s PUBLIC_BASE=%s", DFS_BASE, BACKEND_BASE, PUBLIC_BASE)
