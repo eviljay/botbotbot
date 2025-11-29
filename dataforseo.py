@@ -105,7 +105,7 @@ class DataForSEO:
             "language_code": language_code,
             "sort_by": sort_by,
         }
-
+logging.info("RAW DATAFORSEO: %s", json.dumps(res, ensure_ascii=False, indent=2))
         raw = await self._post("/v3/keywords_data/google_ads/keywords_for_keywords/live", [task])
 
         # Якщо API вже раптом повертає `tasks` (на випадок майбутніх змін) — нічого не чіпаємо.
