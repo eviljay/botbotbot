@@ -1803,7 +1803,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 dofollow = totals.get("dofollow") or s.get("dofollow") or "-"
                 nofollow = totals.get("nofollow") or s.get("nofollow") or "-"
 
-                rdom = await dfs.refdomains_live(target, limit=10, order_by="backlinks,desc")
+                rdom = await dfs.refdomains_live(target, limit=10)
                 r_items = _extract_first_items(rdom)
                 rd_lines = []
                 for it in r_items[:10]:
@@ -1811,7 +1811,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     b = it.get("backlinks") or "-"
                     rd_lines.append(f"• {d} — {b} backlinks")
 
-                anch = await dfs.anchors_live(target, limit=10, order_by="backlinks,desc")
+                rdom = await dfs.refdomains_live(target, limit=10)
                 a_items = _extract_first_items(anch)
                 a_lines = []
                 for it in a_items[:10]:
