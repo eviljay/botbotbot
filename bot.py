@@ -88,18 +88,35 @@ DFS_BASE = os.getenv("DATAFORSEO_BASE", "https://api.dataforseo.com")
 BACKEND_BASE = os.getenv("BACKEND_BASE", "http://127.0.0.1:8001").rstrip("/")
 PUBLIC_BASE = os.getenv("PUBLIC_BASE", "https://server1.seoswiss.online").rstrip("/")
 
+# 1 кредит = скільки грн
 CREDIT_PRICE_UAH = _parse_float_env("CREDIT_PRICE_UAH", 5.0)
+
 INITIAL_BONUS = _parse_int_env("INITIAL_BONUS", 10)
 TOPUP_OPTIONS = _parse_int_list_env("TOPUP_OPTIONS", "100,250,500")
 
-# ціни інструментів (грн → кредити)
-SERP_CHARGE_UAH = _parse_float_env("SERP_CHARGE_UAH", 5.0)
-KW_IDEAS_CHARGE_UAH = _parse_float_env("KW_IDEAS_CHARGE_UAH", 5.0)
-SITE_KW_CHARGE_UAH = _parse_float_env("SITE_KW_CHARGE_UAH", 5.0)
-GAP_CHARGE_UAH = _parse_float_env("GAP_CHARGE_UAH", 10.0)
-BACKLINKS_CHARGE_UAH = _parse_float_env("BACKLINKS_CHARGE_UAH", 5.0)
-BACKLINKS_FULL_EXPORT_CHARGE_UAH = _parse_float_env("BACKLINKS_FULL_EXPORT_CHARGE_UAH", 5.0)
-AUDIT_CHARGE_UAH = _parse_float_env("AUDIT_CHARGE_UAH", 5.0)
+# === Ціни інструментів (в грн за 1 реквест, уже з націнкою) ===
+# Можна налаштовувати через .env:
+# SERP_CHARGE_UAH=0.04
+# KW_IDEAS_CHARGE_UAH=1.2
+# SITE_KW_CHARGE_UAH=1.2
+# GAP_CHARGE_UAH=0.3
+# BACKLINKS_CHARGE_UAH=0.18
+# BACKLINKS_FULL_EXPORT_CHARGE_UAH=0.18
+# AUDIT_CHARGE_UAH=0.6
+#
+# Якщо в .env є ще й PRICE_* (наприклад, PRICE_SERP_ORGANIC),
+# то вручну просто виставляй їх у *_CHARGE_UAH — бот бере саме їх.
+
+SERP_CHARGE_UAH = _parse_float_env("SERP_CHARGE_UAH", 0.04)                 # Google Organic SERP
+KW_IDEAS_CHARGE_UAH = _parse_float_env("KW_IDEAS_CHARGE_UAH", 1.20)         # keywords_for_keywords
+SITE_KW_CHARGE_UAH = _parse_float_env("SITE_KW_CHARGE_UAH", 1.20)           # keywords_for_site
+GAP_CHARGE_UAH = _parse_float_env("GAP_CHARGE_UAH", 0.30)                   # domain_intersection (keyword gap)
+BACKLINKS_CHARGE_UAH = _parse_float_env("BACKLINKS_CHARGE_UAH", 0.18)       # backlinks/backlinks live (огляд)
+BACKLINKS_FULL_EXPORT_CHARGE_UAH = _parse_float_env(
+    "BACKLINKS_FULL_EXPORT_CHARGE_UAH",
+    0.18
+)
+AUDIT_CHARGE_UAH = _parse_float_env("AUDIT_CHARGE_UAH", 0.60)               # on_page/instant_pages
 
 # налаштування експорту
 CSV_MAX = _parse_int_env("CSV_MAX", 1000)
@@ -568,16 +585,16 @@ async def backlinks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     kb = [
         [
-            InlineKeyboardButton("👀 Показати 10 (5₴)", callback_data=f"show|{domain}|10"),
-            InlineKeyboardButton("⬇️ CSV 10 (5₴)", callback_data=f"csv|{domain}|10"),
+            InlineKeyboardButton("👀 Показати 10", callback_data=f"show|{domain}|10"),
+            InlineKeyboardButton("⬇️ CSV 10", callback_data=f"csv|{domain}|10"),
         ],
         [
-            InlineKeyboardButton("👀 Показати всі (5₴)", callback_data=f"show|{domain}|all"),
-            InlineKeyboardButton("⬇️ CSV всі (5₴)", callback_data=f"csv|{domain}|all"),
+            InlineKeyboardButton("👀 Показати всі", callback_data=f"show|{domain}|all"),
+            InlineKeyboardButton("⬇️ CSV всі", callback_data=f"csv|{domain}|all"),
         ],
     ]
     await update.message.reply_text(
-        f"Домен: *{domain}*\nОберіть дію (з кожної дії буде списано 5₴):",
+        f"Домен: *{domain}*\nОберіть дію (з кожної дії буде списано {BACKLINKS_CHARGE_UAH}₴ / перераховано в кредити):",
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode="Markdown",
     )
@@ -714,7 +731,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if scope != "all":
                 limit = PREVIEW_COUNT if scope == "10" else CSV_MAX
-                data_resp = await dfs.backlinks_live(domain, limit=limit, order_by="first_seen,desc")
+                data_resp = await dfs.backlinks_live(domain, limit=limit, offset=0)
                 items = _extract_first_items(data_resp)
                 if not items:
                     bal_now = get_balance(uid)
@@ -1792,8 +1809,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-                      # --- Backlinks Overview (one-line) ---
-             # --- Backlinks Overview (one-line) ---
+            # --- Backlinks Overview (one-line) ---
             if aw == "backlinks_ov":
                 target = main
 
@@ -1837,7 +1853,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 buf = io.StringIO()
                 w = csv.writer(buf)
 
-                # Шапка CSV — основні поля з прикладу
+                # Шапка CSV — основні поля
                 w.writerow([
                     "Ref Domain",
                     "Ref URL",
@@ -1845,8 +1861,8 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Is dofollow?",
                     "Spam Score",
                     "Rank",
-                    "Page From Rank",
-                    "Domain From Rank",
+                    "Page Rank",
+                    "Domain Rank",
                     "Ref URL Status Code",
                     "URL Status Code ",
                     "New?",
@@ -1868,7 +1884,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Page From Size",
                     "Page From language",
                     "Page from Title",
-                    "Spam Score",
+                    "Spam Score URL",
                     "Is Indirect Link",
                     "Indirect Link Path",
                 ])
@@ -1937,8 +1953,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     caption="CSV з деталями по backlinks (live, top 100)"
                 )
                 return
-
-
 
             # --- Audit URL (one-line) ---
             if aw == "audit":

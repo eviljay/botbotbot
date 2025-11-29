@@ -1,7 +1,12 @@
 import base64
 from typing import Any, Dict, List, Tuple
 
-from httpx import AsyncClient
+from httpx import AsyncClient, HTTPStatusError
+
+
+class DataForSEOError(Exception):
+    """Кастомна помилка для DataForSEO."""
+    pass
 
 
 class DataForSEO:
@@ -22,12 +27,26 @@ class DataForSEO:
         """
         Базовий POST-запит. Повертає сирий JSON від DataForSEO.
         НІЧОГО не парсимо тут — тільки HTTP і JSON.
+        Кидає DataForSEOError при HTTP- або JSON-помилках.
         """
         url = f"{self.base_url}{path}"
         async with AsyncClient(timeout=60) as client:
             resp = await client.post(url, headers=self._headers, json=payload)
+
+        try:
             resp.raise_for_status()
+        except HTTPStatusError as e:
+            # пробуємо витягнути тіло помилки
+            try:
+                data = resp.json()
+            except Exception:
+                data = resp.text
+            raise DataForSEOError(f"DataForSEO HTTP {resp.status_code}: {data}") from e
+
+        try:
             return resp.json()
+        except Exception as e:
+            raise DataForSEOError("Invalid JSON from DataForSEO") from e
 
     # ========= SERP =========
 
@@ -145,6 +164,26 @@ class DataForSEO:
         }
         return await self._post("/v3/keywords_data/google_ads/keywords_for_site/live", [task])
 
+    # ========= KEYWORD DIFFICULTY (Labs) =========
+
+    async def keyword_difficulty(
+        self,
+        keywords: List[str],
+        location_code: int,
+        language_code: str,
+    ) -> Dict[str, Any]:
+        """
+        /v3/dataforseo_labs/google/keyword_difficulty/live
+
+        Складність ключових слів.
+        """
+        task = {
+            "keywords": keywords,
+            "location_code": location_code,
+            "language_code": language_code,
+        }
+        return await self._post("/v3/dataforseo_labs/google/keyword_difficulty/live", [task])
+
     # ========= KEYWORD GAP (Labs: domain_intersection) =========
 
     async def keywords_gap(
@@ -188,6 +227,26 @@ class DataForSEO:
 
         return await self._post("/v3/dataforseo_labs/google/domain_intersection/live", [task])
 
+    async def keyword_gap(
+        self,
+        target: str,
+        competitors: List[str],
+        location_code: int,
+        language_code: str,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """
+        Alias, щоб збігалося з викликами в боті.
+        Викликає keywords_gap().
+        """
+        return await self.keywords_gap(
+            target=target,
+            competitors=competitors,
+            location_code=location_code,
+            language_code=language_code,
+            limit=limit,
+        )
+
     # ========= BACKLINKS =========
 
     async def backlinks_live(
@@ -220,8 +279,6 @@ class DataForSEO:
             "rank_scale": "one_hundred",
         }
         return await self._post("/v3/backlinks/backlinks/live", [task])
-
- 
 
     async def backlinks_all(
         self,
@@ -291,8 +348,6 @@ class DataForSEO:
             "rank_scale": "one_hundred",
         }
         return await self._post("/v3/backlinks/summary/live", [task])
-
- 
 
     async def refdomains_live(
         self,
