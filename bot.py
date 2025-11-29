@@ -336,20 +336,35 @@ def _write_backlink_rows(writer: csv.writer, items: List[dict]):
             it.get("last_visited"),
             it.get("domain_from"),
         ])
-def find_keyword_items(resp):
+def find_keyword_items(node):
     """
-    Дістаємо items з відповіді DataForSEO для keywords_for_keywords.
+    Рекурсивно шукає перший список dict'ів, у яких є ключ 'keyword' або 'keyword_text'.
+    Працює з будь-якою вкладеністю (як у debug-скрипті).
     """
-    tasks = resp.get("tasks") or []
-    if not tasks:
-        return []
-    t0 = tasks[0] or {}
-    results = t0.get("result") or []
-    if not results:
-        return []
-    r0 = results[0] or {}
-    items = r0.get("items") or []
-    return items
+    # Якщо це список
+    if isinstance(node, list):
+        # Якщо це список об’єктів з 'keyword'/'keyword_text' – це те, що нам треба
+        if node and all(
+            isinstance(x, dict) and ("keyword" in x or "keyword_text" in x)
+            for x in node
+        ):
+            return node
+
+        # Інакше обходимо всіх дітей
+        for x in node:
+            found = find_keyword_items(x)
+            if found:
+                return found
+
+    # Якщо це dict – обходимо значення
+    elif isinstance(node, dict):
+        for v in node.values():
+            found = find_keyword_items(v)
+            if found:
+                return found
+
+    return []
+
 
 
 def filter_keywords(items, min_search_volume: int = 1):
