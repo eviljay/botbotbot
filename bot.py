@@ -1584,7 +1584,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             # --- GAP (one-line) ---
-                       if aw == "gap":
+            if aw == "gap":
                 comps_raw = opts.get("comps") or opts.get("competitors") or ""
                 competitors = [x.strip() for x in comps_raw.split(",") if x.strip()]
                 if not main or not competitors:
