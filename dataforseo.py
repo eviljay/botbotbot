@@ -25,21 +25,6 @@ class DataForSEO:
             r.raise_for_status()
             return r.json()
 
-    async def _post(self, path: str, payload):
-        url = f"{self.base}{path}"
-        async with httpx.AsyncClient(timeout=90) as client:
-            r = await client.post(
-                url,
-                headers={
-                    **self.auth,
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            r.raise_for_status()
-            return r.json()
-
     # ========= Backlinks =========
     async def backlinks_live(
         self,
@@ -49,31 +34,16 @@ class DataForSEO:
         filters: Optional[list] = None,
         offset: int = 0,
     ):
-        task = {
-            "target": target,
-            "limit": limit,
-            "order_by": [order_by],
-            "offset": offset,
-        }
+        task = {"target": target, "limit": limit, "order_by": [order_by], "offset": offset}
         if filters:
             task["filters"] = filters
         return await self._post_array("/v3/backlinks/backlinks/live", [task])
 
-    async def refdomains_live(
-        self,
-        target: str,
-        limit: int = 50,
-        order_by: str = "backlinks,desc",
-    ):
+    async def refdomains_live(self, target: str, limit: int = 50, order_by: str = "backlinks,desc"):
         task = {"target": target, "limit": limit, "order_by": [order_by]}
         return await self._post_array("/v3/backlinks/referring_domains/live", [task])
 
-    async def anchors_live(
-        self,
-        target: str,
-        limit: int = 50,
-        order_by: str = "backlinks,desc",
-    ):
+    async def anchors_live(self, target: str, limit: int = 50, order_by: str = "backlinks,desc"):
         task = {"target": target, "limit": limit, "order_by": [order_by]}
         return await self._post_array("/v3/backlinks/anchors/live", [task])
 
@@ -89,6 +59,7 @@ class DataForSEO:
         max_total: int = 200000,
         filters: Optional[list] = None,
     ) -> Tuple[List[dict], int]:
+        """Повертає (всі_рядки_до_ліміту, оцінка_total)."""
         all_items: List[dict] = []
         total_estimate = 0
         offset = 0
@@ -178,7 +149,8 @@ class DataForSEO:
             "limit": limit,
         }
         return await self._post_array(
-            "/v3/keywords_data/google_ads/keywords_for_keywords/live", [task]
+            "/v3/keywords_data/google_ads/keywords_for_keywords/live",
+            [task],
         )
 
     async def google_ads_search_volume(
@@ -193,18 +165,34 @@ class DataForSEO:
             "language_name": language_name,
         }
         return await self._post_array(
-            "/v3/keywords_data/google_ads/search_volume/live", [task]
+            "/v3/keywords_data/google_ads/search_volume/live",
+            [task],
         )
 
-    # ========= Labs: Keyword Gap =========
+    # ========= Labs: Ranked Keywords (для GAP) =========
+    async def ranked_keywords(self, tasks: list[dict]):
+        """
+        Обгортка для /v3/dataforseo_labs/google/ranked_keywords/live
+        Очікує вже підготовлений масив tasks.
+        """
+        return await self._post_array(
+            "/v3/dataforseo_labs/google/ranked_keywords/live",
+            tasks,
+        )
+
+    # ========= Labs: Keywords Gap (старий формат, якщо раптом знадобиться) =========
     async def keywords_gap(
         self,
         target: str,
-        competitors: List[str],
+        competitors: list[str],
         location_name: str = "Ukraine",
         language_name: str = "Ukrainian",
         limit: int = 50,
     ):
+        """
+        Проста обгортка для keyword_intersections.
+        Залишена на всяк випадок, зараз у боті використовується ranked_keywords.
+        """
         tasks = []
         for comp in competitors:
             tasks.append(
@@ -218,30 +206,18 @@ class DataForSEO:
                 }
             )
         return await self._post_array(
-            "/v3/dataforseo_labs/keyword_intersections/live", tasks
-        )
-
-    # ========= Domain Intersection (опціонально) =========
-    async def domain_intersection(
-        self,
-        target: str,
-        competitor: str,
-        location_name: str = "Ukraine",
-        language_name: str = "Ukrainian",
-        limit: int = 50,
-    ):
-        task = {
-            "target1": target,
-            "target2": competitor,
-            "location_name": location_name,
-            "language_name": language_name,
-            "limit": limit,
-        }
-        return await self._post_array(
-            "/v3/dataforseo_labs/google/domain_intersection/live", [task]
+            "/v3/dataforseo_labs/keyword_intersections/live",
+            tasks,
         )
 
     # ========= On-Page instant =========
     async def onpage_instant(self, url: str):
-        payload = {1: {"url": url}}
-        return await self._post("/v3/on_page/instant_pages", payload)
+        """
+        On-Page instant pages.
+        """
+        tasks = [
+            {
+                "url": url,
+            }
+        ]
+        return await self._post_array("/v3/on_page/instant_pages", tasks)
