@@ -4,7 +4,7 @@ from httpx import AsyncClient
 
 
 LOGIN = "info@seoswiss.online"
-PASSWORD = "bidcow-myjzUf-cutxy8"
+PASSWORD = "d752edcc5e5dbd73"
 
 
 async def debug_keywords_for_keywords(keyword: str, location: int, language: str):
