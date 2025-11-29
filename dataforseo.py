@@ -1,7 +1,7 @@
 import os
 from typing import List, Tuple, Optional
 
-from httpx import AsyncClient, HTTPError, ConnectError
+from httpx import AsyncClient
 
 
 class DataForSEO:
@@ -33,8 +33,6 @@ class DataForSEO:
     ) -> dict:
         """
         /v3/serp/google/organic/live/advanced
-
-        Повертає tasks -> result -> items (standard DataForSEO structure)
         """
         task = {
             "keyword": keyword,
@@ -51,20 +49,18 @@ class DataForSEO:
         keyword: str,
         location_name: str = "Ukraine",
         language_name: str = "Ukrainian",
-        limit: int = 100,
+        limit: int = 100,  # тут тільки для того, щоб бот знав, скільки різати
     ) -> dict:
         """
         /v3/keywords_data/google_ads/keywords_for_keywords/live
 
-        ВАЖЛИВО: це вже не SERP, а Keywords Data.
-        Response: tasks -> result -> items, де items містять keyword, search_volume, cpc і т.д.
+        У цього endpoint-а нема полів page/limit у body,
+        тому передаємо тільки keywords + location_name + language_name.
         """
         task = {
             "keywords": [keyword],
             "location_name": location_name,
             "language_name": language_name,
-            "page": 1,
-            "limit": limit,     # бот усе одно ще раз обрізає по limit
         }
         return await self._post("/v3/keywords_data/google_ads/keywords_for_keywords/live", [task])
 
@@ -79,8 +75,6 @@ class DataForSEO:
     ) -> dict:
         """
         /v3/dataforseo_labs/google/keyword_intersections/live
-
-        Повертає tasks[], де в кожному task -> data.competitors + result[0].items[]
         """
         task = {
             "target": target,
@@ -91,7 +85,7 @@ class DataForSEO:
         }
         return await self._post("/v3/dataforseo_labs/google/keyword_intersections/live", [task])
 
-    # ========== DOMAIN INTERSECTION (якщо захочеш повернути) ==========
+    # ========== DOMAIN INTERSECTION (опційно) ==========
     async def domain_intersection(
         self,
         target1: str,
@@ -115,7 +109,7 @@ class DataForSEO:
         }
         return await self._post("/v3/dataforseo_labs/google/domain_intersection/live", [task])
 
-    # ========== BACKLINKS (огляд / ліст / refdomains / anchors) ==========
+    # ========== BACKLINKS ==========
     async def backlinks_live(
         self,
         target: str,
