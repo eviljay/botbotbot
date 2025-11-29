@@ -74,7 +74,7 @@ class DataForSEO:
         }
         return await self._post("/v3/keywords_data/google_ads/keywords_for_keywords/live", [task])
 
-    # ========= KEYWORD GAP (Labs: domain_intersection) =========
+        # ========= KEYWORD GAP (Labs: domain_intersection) =========
 
     async def keywords_gap(
         self,
@@ -88,34 +88,35 @@ class DataForSEO:
         /v3/dataforseo_labs/google/domain_intersection/live
 
         target1 — наш домен
-        target2..4 — конкуренти
-        intersections — з ким робити перетин.
+        target2 — конкурент (по одному таску на конкурента)
+
+        Повертаємо один resp з кількома tasks (по одному на кожного конкурента).
         """
-        comps = competitors[:3]
-        task: Dict[str, Any] = {
-            "target1": target,
-            "include_subdomains": True,
-            "search_partners": False,
-            "location_code": location_code,
-            "language_code": language_code,
-            "limit": limit,
-        }
-        intersections = []
+        tasks: List[Dict[str, Any]] = []
 
-        if len(comps) >= 1:
-            task["target2"] = comps[0]
-            intersections.append("target2")
-        if len(comps) >= 2:
-            task["target3"] = comps[1]
-            intersections.append("target3")
-        if len(comps) >= 3:
-            task["target4"] = comps[2]
-            intersections.append("target4")
+        for comp in competitors[:3]:
+            tasks.append(
+                {
+                    "target1": target,
+                    "target2": comp,
+                    "location_code": location_code,
+                    "language_code": language_code,
+                    "limit": limit,
+                    # це з доки: треба, щоб повернули SERP-елементи з рангами
+                    "include_serp_info": True,
+                    # можна залишити false, поки не треба клікстрім
+                    "include_clickstream_data": False,
+                }
+            )
 
-        if intersections:
-            task["intersections"] = intersections
+        if not tasks:
+            return {"tasks": []}
 
-        return await self._post("/v3/dataforseo_labs/google/domain_intersection/live", [task])
+        return await self._post(
+            "/v3/dataforseo_labs/google/domain_intersection/live",
+            tasks,
+        )
+
 
     # ========= BACKLINKS =========
 
