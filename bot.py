@@ -1791,9 +1791,11 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-            # --- Backlinks Overview (one-line) ---
+                      # --- Backlinks Overview (one-line) ---
             if aw == "backlinks_ov":
                 target = main
+
+                # ===== summary =====
                 summary = await dfs.backlinks_summary(target)
                 s = _extract_result(summary)
 
@@ -1803,7 +1805,8 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 dofollow = totals.get("dofollow") or s.get("dofollow") or "-"
                 nofollow = totals.get("nofollow") or s.get("nofollow") or "-"
 
-                rdom = await dfs.refdomains_live(target, limit=10)
+                # ===== referring domains (top) =====
+                rdom = await dfs.refdomains_live(target, limit=20)
                 r_items = _extract_first_items(rdom)
                 rd_lines = []
                 for it in r_items[:10]:
@@ -1811,13 +1814,56 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     b = it.get("backlinks") or "-"
                     rd_lines.append(f"• {d} — {b} backlinks")
 
-                anch = await dfs.refdomains_live(target, limit=10)
+                # ===== anchors (top) =====
+                # тут саме anchors_live, а не refdomains_live
+                anch = await dfs.anchors_live(target, limit=50)
                 a_items = _extract_first_items(anch)
                 a_lines = []
                 for it in a_items[:10]:
                     a = it.get("anchor") or "-"
                     b = it.get("backlinks") or "-"
                     a_lines.append(f"• {a[:60]} — {b}")
+
+                # ===== CSV: summary + top ref.domains + top anchors =====
+                buf = io.StringIO()
+                w = csv.writer(buf)
+
+                # Summary
+                w.writerow(["section", "metric", "value"])
+                w.writerow(["summary", "backlinks", backlinks])
+                w.writerow(["summary", "referring_domains", refdomains])
+                w.writerow(["summary", "dofollow", dofollow])
+                w.writerow(["summary", "nofollow", nofollow])
+                w.writerow([])
+
+                # Top referring domains
+                w.writerow(["Top referring domains"])
+                w.writerow(["domain", "backlinks", "dofollow", "nofollow", "first_seen", "last_visited"])
+                for it in r_items:
+                    w.writerow([
+                        it.get("domain") or it.get("referring_domain") or "",
+                        it.get("backlinks") or "",
+                        it.get("dofollow") or "",
+                        it.get("nofollow") or "",
+                        it.get("first_seen") or "",
+                        it.get("last_visited") or "",
+                    ])
+                w.writerow([])
+
+                # Top anchors
+                w.writerow(["Top anchors"])
+                w.writerow(["anchor", "backlinks", "dofollow", "nofollow", "first_seen", "last_visited"])
+                for it in a_items:
+                    w.writerow([
+                        it.get("anchor") or "",
+                        it.get("backlinks") or "",
+                        it.get("dofollow") or "",
+                        it.get("nofollow") or "",
+                        it.get("first_seen") or "",
+                        it.get("last_visited") or "",
+                    ])
+
+                csv_bytes = buf.getvalue().encode()
 
                 bal_now = get_balance(uid)
                 txt = (
@@ -1829,8 +1875,19 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"Топ анкорів:\n" + ("\n".join(a_lines) or "—") +
                     f"\n\n💰 Списано {need_credits}. Баланс: {bal_now}"
                 )
-                await update.message.reply_text(txt, parse_mode="Markdown", reply_markup=services_menu_keyboard())
+
+                await update.message.reply_text(
+                    txt,
+                    parse_mode="Markdown",
+                    reply_markup=services_menu_keyboard()
+                )
+
+                await update.message.reply_document(
+                    document=InputFile(io.BytesIO(csv_bytes), filename=f"{target}_backlinks_overview.csv"),
+                    caption="CSV з summary + топ реф.доменів + топ анкорів"
+                )
                 return
+
 
             # --- Audit URL (one-line) ---
             if aw == "audit":
