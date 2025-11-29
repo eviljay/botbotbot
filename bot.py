@@ -336,6 +336,40 @@ def _write_backlink_rows(writer: csv.writer, items: List[dict]):
             it.get("last_visited"),
             it.get("domain_from"),
         ])
+def find_keyword_items(resp):
+    """
+    Дістаємо items з відповіді DataForSEO для keywords_for_keywords.
+    """
+    tasks = resp.get("tasks") or []
+    if not tasks:
+        return []
+    t0 = tasks[0] or {}
+    results = t0.get("result") or []
+    if not results:
+        return []
+    r0 = results[0] or {}
+    items = r0.get("items") or []
+    return items
+
+
+def filter_keywords(items, min_search_volume: int = 1):
+    """
+    Фільтруємо keywords з пошуковим обсягом >= min_search_volume.
+    """
+    out = []
+    for it in items:
+        vol = (
+            it.get("search_volume")
+            or it.get("avg_monthly_searches")
+            or it.get("search_volume_avg")
+        )
+        try:
+            vol_val = int(vol)
+        except Exception:
+            vol_val = 0
+        if vol_val >= min_search_volume:
+            out.append(it)
+    return out
 
 
 # ====== Клавіатури оплати ======
@@ -1369,7 +1403,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # One-line wizard для Backlinks/Audit (та старого формату)
+    # One-line wizard для всіх інструментів
     aw = context.user_data.get("await_tool")
     if aw:
         context.user_data.pop("await_tool", None)
@@ -1385,6 +1419,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         location_code = LOCATION_CODES.get(country_name, 2840)
         language_code = LANGUAGE_CODES.get(language_name, "en")
         limit = int(re.findall(r"\d+", opts.get("limit", "20"))[0]) if opts.get("limit") else 20
+
         prices = {
             "serp": SERP_CHARGE_UAH,
             "keywords": KW_IDEAS_CHARGE_UAH,
@@ -1401,7 +1436,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         try:
-            # SERP / Keywords / Gap залишилися для сумісності, але основний юз-кейс у флоу вище
+            # --- SERP (one-line) ---
             if aw == "serp":
                 depth = int(re.findall(r"\d+", opts.get("depth", "10"))[0]) if opts.get("depth") else 10
                 resp = await dfs.serp_google_organic(
@@ -1452,6 +1487,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
+            # --- Keyword Ideas (one-line) ---
             if aw == "keywords":
                 resp = await dfs.keywords_for_keywords(
                     main,
@@ -1459,7 +1495,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     language_code=language_code,
                 )
 
-                # шукаємо keywords + фільтруємо по search_volume
                 items_all = find_keyword_items(resp)
                 items = filter_keywords(items_all, min_search_volume=1)
 
@@ -1471,7 +1506,6 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
 
                 items_limited = items[:limit]
-
 
                 lines = []
                 for it in items_limited[:10]:
@@ -1509,6 +1543,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
+            # --- GAP (one-line) ---
             if aw == "gap":
                 comps_raw = opts.get("comps") or opts.get("competitors") or ""
                 competitors = [x.strip() for x in comps_raw.split(",") if x.strip()]
@@ -1518,18 +1553,13 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="Markdown",
                     )
 
-                try:
-                    resp = await dfs.keywords_gap(
-                        main,
-                        competitors,
-                        location_code=location_code,
-                        language_code=language_code,
-                        limit=limit,
-                    )
-                except Exception as e:
-                    log.exception("GAP request failed (wizard)")
-                    await update.message.reply_text(f"Помилка від DataForSEO: {e}")
-                    return
+                resp = await dfs.keywords_gap(
+                    main,
+                    competitors,
+                    location_code=location_code,
+                    language_code=language_code,
+                    limit=limit,
+                )
 
                 tasks = resp.get("tasks") or []
                 rows = []
@@ -1581,7 +1611,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-            # Backlinks Overview
+            # --- Backlinks Overview (one-line) ---
             if aw == "backlinks_ov":
                 target = main
                 summary = await dfs.backlinks_summary(target)
@@ -1622,7 +1652,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(txt, parse_mode="Markdown", reply_markup=services_menu_keyboard())
                 return
 
-            # Audit URL
+            # --- Audit URL (one-line) ---
             if aw == "audit":
                 url = main
                 res = await dfs.onpage_instant(url)
@@ -1663,20 +1693,17 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=services_menu_keyboard())
                 return
 
+            # fallback
             bal_now = get_balance(uid)
             return await update.message.reply_text(
                 f"Інструмент поки не реалізовано. Баланс: {bal_now}",
                 reply_markup=services_menu_keyboard(),
             )
 
-        except HTTPError as e:
-            log.exception("DataForSEO HTTP error")
-            return await update.message.reply_text(f"DataForSEO HTTP error: {e}")
         except Exception as e:
-            log.exception("Unexpected error")
             return await update.message.reply_text(f"Помилка: {e}")
 
-    # Стандартні пункти меню
+    # Стандартні пункти меню (якщо не активний await_tool)
     if text == "🧰 Сервіси":
         return await services_menu(update, context)
     if text == "💳 Поповнити":
