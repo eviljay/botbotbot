@@ -1865,9 +1865,9 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"• Backlinks: {escape(str(backlinks))}\n"
                     f"• Referring domains: {escape(str(refdomains))}\n"
                     f"• Dofollow: {escape(str(dofollow))} | Nofollow: {escape(str(nofollow))}\n\n"
-                    f"Топ реф.доменів:\n" + ("<br>".join(rd_lines) or "—") + "<br><br>"
-                    f"Топ анкорів:\n" + ("<br>".join(a_lines) or "—") +
-                    f"<br><br>💰 Списано {escape(str(need_credits))}. Баланс: {escape(str(bal_now))}"
+                    f"Топ реф.доменів:\n" + ("\n".join(rd_lines) or "—") + "\n\n"
+                    f"Топ анкорів:\n" + ("\n".join(a_lines) or "—") +
+                    f"\n\n💰 Списано {escape(str(need_credits))}. Баланс: {escape(str(bal_now))}"
                 )
 
                 await update.message.reply_text(
