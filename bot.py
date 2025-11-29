@@ -1312,7 +1312,7 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
             await update.message.reply_text(f"Помилка від DataForSEO: {e}")
             return
 
-                tasks = resp.get("tasks") or []
+        tasks = resp.get("tasks") or []
         rows = []
 
         for t in tasks:
