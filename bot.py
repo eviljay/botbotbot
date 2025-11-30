@@ -2036,18 +2036,6 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
                 )
                 return
 
-
-
-
-
-
-
-
-
-
-
-
-
             buf = io.StringIO()
             w = csv.writer(buf)
             w.writerow([
@@ -2064,8 +2052,6 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
             preview_lines = [f"📈 Огляд сайту {target} ({country_name}, {language_name})\n"]
             page_idx = 1
 
-            # йдемо по всіх pages[:pages_limit] — для CSV
-            # але прев'ю в тексті робимо тільки для перших 10 сторінок
             for p in pages[:pages_limit]:
                 page_url = p.get("page_address") or ""
                 metrics = (p.get("metrics") or {}).get("organic") or {}
@@ -2088,27 +2074,22 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
                 except Exception:
                     kw_items = []
 
-                # --- прев'ю тільки для перших 10 сторінок ---
-                if page_idx <= 10:
-                    preview_lines.append(
-                        f"{page_idx}. {page_url}\n"
-                        f"   keywords: {kw_count}, ETV: {etv_val:.2f}, paid_est: {paid_cost:.2f}"
-                    )
+                preview_lines.append(
+                    f"{page_idx}. {page_url}\n"
+                    f"   keywords: {kw_count}, ETV: {etv_val:.2f}, paid_est: {paid_cost:.2f}"
+                )
 
-                    for kw_item in kw_items[:3]:
-                        kd = kw_item.get("keyword_data") or {}
-                        ki = kd.get("keyword_info") or {}
-                        se = (kw_item.get("ranked_serp_element") or {}).get("serp_item") or {}
+                for kw_item in kw_items[:3]:
+                    kd = kw_item.get("keyword_data") or {}
+                    ki = kd.get("keyword_info") or {}
+                    se = (kw_item.get("ranked_serp_element") or {}).get("serp_item") or {}
 
-                        kw_str = kd.get("keyword") or "—"
-                        sv = ki.get("search_volume") or 0
-                        rank = se.get("rank_group") or se.get("rank_absolute") or "-"
-                        kw_etv = se.get("etv") or 0
-                        preview_lines.append(f"      • {kw_str} — vol:{sv}, pos:{rank}, etv:{kw_etv:.2f}")
+                    kw_str = kd.get("keyword") or "—"
+                    sv = ki.get("search_volume") or 0
+                    rank = se.get("rank_group") or se.get("rank_absolute") or "-"
+                    kw_etv = se.get("etv") or 0
+                    preview_lines.append(f"      • {kw_str} — vol:{sv}, pos:{rank}, etv:{kw_etv:.2f}")
 
-                    preview_lines.append("")
-
-                # --- CSV завжди по всіх сторінках / усіх ключах ---
                 for kw_item in kw_items:
                     kd = kw_item.get("keyword_data") or {}
                     ki = kd.get("keyword_info") or {}
@@ -2129,20 +2110,13 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
                         kw_etv,
                     ])
 
+                preview_lines.append("")
                 page_idx += 1
 
             csv_bytes = buf.getvalue().encode()
             bal_now = get_balance(uid)
 
             preview_text = "\n".join(preview_lines) + f"\n💰 Списано {need_credits}. Баланс: {bal_now}"
-
-            # підстрахуємось від ліміту 4096 символів Telegram
-            if len(preview_text) > 4000:
-                preview_text = (
-                    preview_text[:3900]
-                    + "\n\n(Текст обрізано, повний звіт дивись у CSV-файлі нижче 👇)"
-                )
-
             await update.message.reply_text(
                 preview_text,
                 reply_markup=services_menu_keyboard(),
