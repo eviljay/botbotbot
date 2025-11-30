@@ -1012,7 +1012,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         context.user_data["serp_state"] = "country"
         await update.message.reply_text(
             "Оберіть країну для пошуку:",
-            reply_markup=countries_keyboard(),
+            reply_markup=countries_keyboard(kb, resize_keyboard=True),
         )
         return
 
@@ -1029,7 +1029,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         context.user_data["serp_state"] = "language"
         await update.message.reply_text(
             "Тепер оберіть мову пошуку:",
-            reply_markup=languages_keyboard(),
+            reply_markup=languages_keyboard(kb, resize_keyboard=True),
         )
         return
 
@@ -1048,7 +1048,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             "Глибина SERP: обери 10, 20 або 30 або 100.",
             reply_markup=ReplyKeyboardMarkup(
                 [[KeyboardButton("10"), KeyboardButton("20"), KeyboardButton("30"), KeyboardButton("100")]],
-                resize_keyboard=True,
+                resize_keyboard=True,kb
             ),
         )
         return
