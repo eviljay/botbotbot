@@ -282,7 +282,7 @@ class DataForSEO:
             )
 
         return await self._post(
-            "/v3/dataforseo_labs/google/keywords_gaps/live",
+            "/v3/dataforseo_labs/google/domain_intersection/live",
             tasks,
         )
 
