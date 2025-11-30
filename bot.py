@@ -1589,7 +1589,7 @@ async def start_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("await_tool", None)
     kb = [[KeyboardButton("⬅️ Назад")]]
     await update.message.reply_text(
-        "⚔️ GAP\n\nВведи свій сайт (target), напр. `mydomain.com`:",
+        "⚔️ GAP\n\nЦе є аналог ключа keyword gap, якій дозволяє побачити де краще працює конкурент\n\nВведи свій сайт (target), напр. `mydomain.com`:",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True),
     )
