@@ -1484,6 +1484,266 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
         )
         return
 
+    # 5) limit -> запуск
+    if state == "limit":
+        try:
+            kw_limit = int(text)
+        except ValueError:
+            await update.message.reply_text("Напиши число: 5, 10, 15, 20, 25, 50 або 100.")
+            return
+
+        allowed = {5, 10, 15, 20, 25, 50, 100}
+        if kw_limit not in allowed:
+            await update.message.reply_text("Підтримуються значення: 5, 10, 15, 20, 25, 50, 100.")
+            return
+
+        data["limit"] = kw_limit
+
+        target = data.get("target") or ""
+        country_name = data.get("country") or "Ukraine"
+        language_name = data.get("language") or "Ukrainian"
+        pages_limit = data.get("pages") or 5
+
+        location_code = LOCATION_CODES.get(country_name, 2840)
+        language_code = LANGUAGE_CODES.get(language_name, "en")
+
+        # очищаємо state
+        context.user_data.pop("siteov_state", None)
+        context.user_data.pop("siteov", None)
+
+        if not dfs:
+            await update.message.reply_text(
+                "DataForSEO не сконфігуровано. Додайте DATAFORSEO_LOGIN/PASSWORD у .env"
+            )
+            return
+
+        need_credits = _uah_to_credits(SITE_OVERVIEW_CHARGE_UAH)
+        if not charge(uid, need_credits, "svc:site_overview", target or "-"):
+            await update.message.reply_text(
+                f"Недостатньо кредитів (потрібно {need_credits}). Поповніть баланс.",
+                reply_markup=_topup_cta(),
+            )
+            return
+
+        await update.message.reply_text(
+            f"Готую огляд сайту {target} ({country_name}, {language_name})…",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+
+        try:
+            site_resp = await dfs.relevant_pages(
+                target,
+                location_code=location_code,
+                language_code=language_code,
+                limit=pages_limit,
+            )
+            site_res = _extract_result(site_resp)
+            pages = site_res.get("items") or []
+
+            if not pages:
+                bal_now = get_balance(uid)
+                await update.message.reply_text(
+                    f"Нічого не знайшов по сайту 😕\nБаланс: {bal_now}",
+                    reply_markup=services_menu_keyboard(),
+                )
+                return
+
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow([
+                "page_url",
+                "organic_keywords_count",
+                "organic_etv",
+                "organic_estimated_paid_traffic_cost",
+                "keyword",
+                "search_volume",
+                "rank",
+                "etv",
+            ])
+
+            preview_lines = [f"📈 Огляд сайту {target} ({country_name}, {language_name})\n"]
+            page_idx = 1
+
+            for p in pages[:pages_limit]:
+                page_url = p.get("page_address") or ""
+                metrics = (p.get("metrics") or {}).get("organic") or {}
+                kw_count = metrics.get("count") or 0
+                etv_val = metrics.get("etv") or 0
+                paid_cost = metrics.get("estimated_paid_traffic_cost") or 0
+
+                rel = urlparse(page_url).path or "/"
+
+                try:
+                    kw_resp = await dfs.ranked_keywords_for_url(
+                        target,
+                        location_code=location_code,
+                        language_code=language_code,
+                        relative_url=rel,
+                        limit=kw_limit,
+                    )
+                    kw_res = _extract_result(kw_resp)
+                    kw_items = kw_res.get("items") or []
+                except Exception:
+                    kw_items = []
+
+                preview_lines.append(
+                    f"{page_idx}. {page_url}\n"
+                    f"   keywords: {kw_count}, ETV: {etv_val:.2f}, paid_est: {paid_cost:.2f}"
+                )
+
+                for kw_item in kw_items[:3]:
+                    kd = kw_item.get("keyword_data") or {}
+                    ki = kd.get("keyword_info") or {}
+                    se = (kw_item.get("ranked_serp_element") or {}).get("serp_item") or {}
+
+                    kw_str = kd.get("keyword") or "—"
+                    sv = ki.get("search_volume") or 0
+                    rank = se.get("rank_group") or se.get("rank_absolute") or "-"
+                    kw_etv = se.get("etv") or 0
+                    preview_lines.append(f"      • {kw_str} — vol:{sv}, pos:{rank}, etv:{kw_etv:.2f}")
+
+                for kw_item in kw_items:
+                    kd = kw_item.get("keyword_data") or {}
+                    ki = kd.get("keyword_info") or {}
+                    se = (kw_item.get("ranked_serp_element") or {}).get("serp_item") or {}
+
+                    kw_str = kd.get("keyword") or ""
+                    sv = ki.get("search_volume") or ""
+                    rank = se.get("rank_group") or se.get("rank_absolute") or ""
+                    kw_etv = se.get("etv") or ""
+                    w.writerow([
+                        page_url,
+                        kw_count,
+                        etv_val,
+                        paid_cost,
+                        kw_str,
+                        sv,
+                        rank,
+                        kw_etv,
+                    ])
+
+                preview_lines.append("")
+                page_idx += 1
+
+            csv_bytes = buf.getvalue().encode()
+            bal_now = get_balance(uid)
+
+            preview_text = "\n".join(preview_lines) + f"\n💰 Списано {need_credits}. Баланс: {bal_now}"
+            await update.message.reply_text(
+                preview_text,
+                reply_markup=services_menu_keyboard(),
+            )
+            await update.message.reply_document(
+                document=InputFile(io.BytesIO(csv_bytes), filename=f"{target}_overview.csv"),
+                caption="CSV: сторінки сайту + ключі, по яких вони ранжуються"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"Помилка: {e}")
+        return
+
+
+
+async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """
+    Кроки: target -> country -> language -> pages -> limit -> запуск.
+    """
+    state = context.user_data.get("siteov_state")
+    data = context.user_data.get("siteov") or {}
+    uid = update.effective_user.id
+
+    if text == "⬅️ Назад":
+        context.user_data.pop("siteov_state", None)
+        context.user_data.pop("siteov", None)
+        await update.message.reply_text(
+            "Повертаю в меню сервісів.",
+            reply_markup=services_menu_keyboard(),
+        )
+        return
+
+    # 1) target
+    if state == "target":
+        target = text.strip()
+        if not target:
+            await update.message.reply_text(
+                "Введи домен або URL сайту, напр. `wildfortune.net`:",
+                parse_mode="Markdown",
+            )
+            return
+        data["target"] = target
+        context.user_data["siteov"] = data
+        context.user_data["siteov_state"] = "country"
+        await update.message.reply_text(
+            "Оберіть країну:",
+            reply_markup=countries_keyboard(),
+        )
+        return
+
+    # 2) country
+    if state == "country":
+        if text not in SERP_LOCATIONS:
+            await update.message.reply_text(
+                "Оберіть країну з кнопок нижче:",
+                reply_markup=countries_keyboard(),
+            )
+            return
+        data["country"] = text
+        context.user_data["siteov"] = data
+        context.user_data["siteov_state"] = "language"
+        await update.message.reply_text(
+            "Тепер оберіть мову:",
+            reply_markup=languages_keyboard(),
+        )
+        return
+
+    # 3) language
+    if state == "language":
+        if text not in SERP_LANGUAGES:
+            await update.message.reply_text(
+                "Оберіть мову з кнопок нижче:",
+                reply_markup=languages_keyboard(),
+            )
+            return
+        data["language"] = text
+        context.user_data["siteov"] = data
+        context.user_data["siteov_state"] = "pages"
+
+        page_options = [["5", "10", "15"], ["20", "25"], ["50", "100"]]
+        await update.message.reply_text(
+            "Скільки топ-сторінок взяти з сайту?",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton(x) for x in row] for row in page_options],
+                resize_keyboard=True,
+            ),
+        )
+        return
+
+    # 4) pages
+    if state == "pages":
+        try:
+            pages = int(text)
+        except ValueError:
+            await update.message.reply_text("Напиши число: 5, 10, 15, 20, 25, 50 або 100.")
+            return
+
+        allowed = {5, 10, 15, 20, 25, 50, 100}
+        if pages not in allowed:
+            await update.message.reply_text("Підтримуються значення: 5, 10, 15, 20, 25, 50, 100.")
+            return
+
+        data["pages"] = pages
+        context.user_data["siteov"] = data
+        context.user_data["siteov_state"] = "limit"
+
+        limit_options = [["5", "10", "15"], ["20", "25"], ["50", "100"]]
+        await update.message.reply_text(
+            "Скільки ключів на сторінку збирати?",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton(x) for x in row] for row in limit_options],
+                resize_keyboard=True,
+            ),
+        )
+        return
+
     # 5) limit -> запуск інструменту
     if state == "limit":
         try:
@@ -1852,7 +2112,12 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.chat_data["in_services"] = False
         await _set_menu_keyboard(update, context, main_menu_keyboard(_registered(uid)))
         return
+  # 👇 оце ОБОВʼЯЗКОВО має бути
+    if context.user_data.get("siteov_state"):
+        await handle_site_overview_flow(update, context, text)
+        return
 
+    # Швидкий вибір сервісу (reply-кнопки)
     # Швидкий вибір сервісу (reply-кнопки)
     if text in ("🔍 SERP", "🧠 Keyword Ideas", "🌐 Ключі для сайту", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит", "📈 Огляд сайту"):
         if text == "🔍 SERP":
@@ -1870,6 +2135,21 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text == "📈 Огляд сайту":
             await start_site_overview_flow(update, context)
             return
+
+        # нижче лишаємо тільки ті, що працюють через one-line
+        mapping = {
+            "🔗 Backlinks": ("backlinks_ov", "Backlinks: `mydomain.com`"),
+            "🛠️ Аудит": ("audit", "Audit: `https://example.com/page`"),
+        }
+        tool, hint = mapping[text]
+        context.user_data["await_tool"] = tool
+        await update.message.reply_text(
+            f"Окей, надішли параметри в одному рядку.\n\nПриклад:\n{hint}",
+            parse_mode="Markdown",
+            reply_markup=services_menu_keyboard()
+        )
+        return
+
 
         mapping = {
             "🔗 Backlinks": ("backlinks_ov", "Backlinks: `mydomain.com`"),
