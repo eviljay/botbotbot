@@ -9,10 +9,11 @@ import zipfile
 import asyncio
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
 from dotenv import load_dotenv
 from httpx import AsyncClient, ConnectError, HTTPError
 from html import escape
+
 
 from telegram.error import TelegramError
 from telegram import (
@@ -210,25 +211,79 @@ LANGUAGE_CODES = {
     "English": "en",
 }
 
-def build_keyword_gap_message(gap_response: Dict[str, Any], target: str, limit: int = 10) -> str:
+def build_keyword_gap_message(
+    gap_response: Dict[str, Any],
+    target: str,
+    limit: int = 10,
+) -> str:
     """
-    Формує текст для keyword gap на базі відповіді
-    /v3/dataforseo_labs/google/domain_intersection/live
+    gap_response — відповідь від /keywords_gaps/live
+    target — наш домен (наприклад, "fotoklok.se")
+    limit — скільки ключів показати сумарно
     """
-    tasks = gap_response.get("tasks") or []
-    if not tasks:
-        return "⚔️ Keyword Gap\n\nНемає даних від DataForSEO."
 
-    first_task = tasks[0] or {}
-    results = first_task.get("result") or []
-    if not results:
-        return "⚔️ Keyword Gap\n\nDataForSEO нічого не повернув по цьому запиту."
+    results = gap_response.get("result", [])
+    rows: List[Tuple[str, int, str, int]] = []  # (keyword, volume, competitor, comp_pos)
 
-    first_result = results[0] or {}
-    items = first_result.get("items") or []
+    for block in results:
+        # на рівні блока часто є target1/target2 — але підстрахуємось
+        task_info = block.get("task", {})
+        competitor_domain = (
+            task_info.get("target1")
+            or block.get("target1")
+            or "конкурент"
+        )
 
-    if not items:
-        return "⚔️ Keyword Gap\n\nНемає ключових слів у перетині з конкурентами."
+        for item in block.get("items", []):
+            kw_data = item.get("keyword_data", {})
+            keyword = kw_data.get("keyword")
+            kw_info = kw_data.get("keyword_info", {}) or {}
+            volume = kw_info.get("search_volume") or 0
+
+            # позиція конкурента (target1)
+            comp_pos = None
+            t1_serp = (
+                item.get("target1_serp_element")
+                or item.get("ranked_serp_element")
+            )
+            if isinstance(t1_serp, dict):
+                comp_pos = (
+                    t1_serp.get("rank_group")
+                    or t1_serp.get("rank_absolute")
+                )
+
+            # позиція нашого сайту (target2) — для missing GAP її, як правило, нема
+            t2_serp = item.get("target2_serp_element")
+            target_pos = None
+            if isinstance(t2_serp, dict):
+                target_pos = (
+                    t2_serp.get("rank_group")
+                    or t2_serp.get("rank_absolute")
+                )
+
+            # нас цікавлять саме ті ключі, де target не ранжується
+            if target_pos:
+                continue
+
+            if not keyword:
+                continue
+
+            rows.append((keyword, int(volume), competitor_domain, comp_pos or 0))
+
+    # Сортуємо за search volume по спаданню
+    rows.sort(key=lambda x: x[1], reverse=True)
+    rows = rows[:limit]
+
+    if not rows:
+        return "Нічого не знайшов 😕"
+
+    lines = ["⚔️ Keyword Gap"]
+    for keyword, volume, comp, comp_pos in rows:
+        lines.append(
+            f"• {keyword} — vol: {volume}, {comp}: {comp_pos}, vs {target}: –"
+        )
+
+    return "\n".join(lines)
 
     def safe_keyword(item: Dict[str, Any]) -> Optional[str]:
         kd = item.get("keyword_data") or {}

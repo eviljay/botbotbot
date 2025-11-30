@@ -237,7 +237,9 @@ class DataForSEO:
 
     # ========= KEYWORD GAP (Labs: domain_intersection) =========
 
-    # ========= KEYWORD GAP (Labs: domain_intersection) =========
+    
+
+   # ========= KEYWORD GAP (Labs: keywords_gaps) =========
     async def keywords_gap(
         self,
         target: str,
@@ -247,44 +249,43 @@ class DataForSEO:
         limit: int = 50,
     ) -> Dict[str, Any]:
         """
-        Keyword Gap на базі /v3/dataforseo_labs/google/domain_intersection/live
+        Keyword Gap на базі /v3/dataforseo_labs/google/keywords_gaps/live
 
         target — наш сайт (наприклад, "fotoklok.se")
         competitors — список доменів-конкурентів (до 3 шт.)
+        Повертаємо ключі, де конкурент ранжується, а target — ні (missing keywords).
         """
 
         comps = competitors[:3]
 
-        task: Dict[str, Any] = {
-            "target1": target,
-            "include_subdomains": True,
-            "search_partners": False,
-            "location_code": location_code,
-            "language_code": language_code,
-            "limit": limit,
-            # serp_info нам не критично, позиції беремо з *_domain_serp_element
-            "include_serp_info": False,
-        }
+        tasks: List[Dict[str, Any]] = []
 
-        intersections: List[str] = []
-        if len(comps) >= 1:
-            task["target2"] = comps[0]
-            intersections.append("target2")
-        if len(comps) >= 2:
-            task["target3"] = comps[1]
-            intersections.append("target3")
-        if len(comps) >= 3:
-            task["target4"] = comps[2]
-            intersections.append("target4")
-
-        # перетин з усіма переданими конкурентами
-        if intersections:
-            task["intersections"] = intersections
+        for comp in comps:
+            tasks.append(
+                {
+                    # target1 — КОНКУРЕНТ (у нього шукаємо ключі)
+                    "target1": comp,
+                    # target2 — НАШ САЙТ (по ньому дивимось «не ранжується»)
+                    "target2": target,
+                    "include_subdomains": True,
+                    "search_partners": False,
+                    "location_code": location_code,
+                    "language_code": language_code,
+                    "limit": limit,
+                    # хочемо бачити позиції в SERP
+                    "include_serp_info": True,
+                    # тип запиту — "missing" (ключі, яких немає у target2)
+                    "gaps": "missing",
+                    # опційно: сортуємо по search volume
+                    "order_by": ["keyword_data.keyword_info.search_volume,desc"],
+                }
+            )
 
         return await self._post(
-            "/v3/dataforseo_labs/google/domain_intersection/live",
-            [task],
+            "/v3/dataforseo_labs/google/keywords_gaps/live",
+            tasks,
         )
+
 
 
     # ========= BACKLINKS =========
