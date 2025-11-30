@@ -2036,96 +2036,99 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
                 )
                 return
 
-        buf = io.StringIO()
-        w = csv.writer(buf)
-        w.writerow([
-            "page_url",
-            "organic_keywords_count",
-            "organic_etv",
-            "organic_estimated_paid_traffic_cost",
-            "keyword",
-            "search_volume",
-            "rank",
-            "etv",
-        ])
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow([
+                "page_url",
+                "organic_keywords_count",
+                "organic_etv",
+                "organic_estimated_paid_traffic_cost",
+                "keyword",
+                "search_volume",
+                "rank",
+                "etv",
+            ])
 
-        preview_lines = [f"📈 Огляд сайту {target} ({country_name}, {language_name})\n"]
-        page_idx = 1
+            preview_lines = [f"📈 Огляд сайту {target} ({country_name}, {language_name})\n"]
+            page_idx = 1
 
-        for p in pages[:pages_limit]:
-            page_url = p.get("page_address") or ""
-            metrics = (p.get("metrics") or {}).get("organic") or {}
-            kw_count = metrics.get("count") or 0
-            etv_val = metrics.get("etv") or 0
-            paid_cost = metrics.get("estimated_paid_traffic_cost") or 0
+            for p in pages[:pages_limit]:
+                page_url = p.get("page_address") or ""
+                metrics = (p.get("metrics") or {}).get("organic") or {}
+                kw_count = metrics.get("count") or 0
+                etv_val = metrics.get("etv") or 0
+                paid_cost = metrics.get("estimated_paid_traffic_cost") or 0
 
-            rel = urlparse(page_url).path or "/"
+                rel = urlparse(page_url).path or "/"
 
-            try:
-                kw_resp = await dfs.ranked_keywords_for_url(
-                    target,
-                    location_code=location_code,
-                    language_code=language_code,
-                    relative_url=rel,
-                    limit=kw_limit,
+                try:
+                    kw_resp = await dfs.ranked_keywords_for_url(
+                        target,
+                        location_code=location_code,
+                        language_code=language_code,
+                        relative_url=rel,
+                        limit=kw_limit,
+                    )
+                    kw_res = _extract_result(kw_resp)
+                    kw_items = kw_res.get("items") or []
+                except Exception:
+                    kw_items = []
+
+                preview_lines.append(
+                    f"{page_idx}. {page_url}\n"
+                    f"   keywords: {kw_count}, ETV: {etv_val:.2f}, paid_est: {paid_cost:.2f}"
                 )
-                kw_res = _extract_result(kw_resp)
-                kw_items = kw_res.get("items") or []
-            except Exception:
-                kw_items = []
 
-            preview_lines.append(
-                f"{page_idx}. {page_url}\n"
-                f"   keywords: {kw_count}, ETV: {etv_val:.2f}, paid_est: {paid_cost:.2f}"
+                for kw_item in kw_items[:3]:
+                    kd = kw_item.get("keyword_data") or {}
+                    ki = kd.get("keyword_info") or {}
+                    se = (kw_item.get("ranked_serp_element") or {}).get("serp_item") or {}
+
+                    kw_str = kd.get("keyword") or "—"
+                    sv = ki.get("search_volume") or 0
+                    rank = se.get("rank_group") or se.get("rank_absolute") or "-"
+                    kw_etv = se.get("etv") or 0
+                    preview_lines.append(f"      • {kw_str} — vol:{sv}, pos:{rank}, etv:{kw_etv:.2f}")
+
+                for kw_item in kw_items:
+                    kd = kw_item.get("keyword_data") or {}
+                    ki = kd.get("keyword_info") or {}
+                    se = (kw_item.get("ranked_serp_element") or {}).get("serp_item") or {}
+
+                    kw_str = kd.get("keyword") or ""
+                    sv = ki.get("search_volume") or ""
+                    rank = se.get("rank_group") or se.get("rank_absolute") or ""
+                    kw_etv = se.get("etv") or ""
+                    w.writerow([
+                        page_url,
+                        kw_count,
+                        etv_val,
+                        paid_cost,
+                        kw_str,
+                        sv,
+                        rank,
+                        kw_etv,
+                    ])
+
+                preview_lines.append("")
+                page_idx += 1
+
+            csv_bytes = buf.getvalue().encode()
+            bal_now = get_balance(uid)
+
+            preview_text = "\n".join(preview_lines) + f"\n💰 Списано {need_credits}. Баланс: {bal_now}"
+            await update.message.reply_text(
+                preview_text,
+                reply_markup=services_menu_keyboard(),
             )
-
-            for kw_item in kw_items[:3]:
-                kd = kw_item.get("keyword_data") or {}
-                ki = kd.get("keyword_info") or {}
-                se = (kw_item.get("ranked_serp_element") or {}).get("serp_item") or {}
-
-                kw_str = kd.get("keyword") or "—"
-                sv = ki.get("search_volume") or 0
-                rank = se.get("rank_group") or se.get("rank_absolute") or "-"
-                kw_etv = se.get("etv") or 0
-                preview_lines.append(f"      • {kw_str} — vol:{sv}, pos:{rank}, etv:{kw_etv:.2f}")
-
-            for kw_item in kw_items:
-                kd = kw_item.get("keyword_data") or {}
-                ki = kd.get("keyword_info") or {}
-                se = (kw_item.get("ranked_serp_element") or {}).get("serp_item") or {}
-
-                kw_str = kd.get("keyword") or ""
-                sv = ki.get("search_volume") or ""
-                rank = se.get("rank_group") or se.get("rank_absolute") or ""
-                kw_etv = se.get("etv") or ""
-                w.writerow([
-                    page_url,
-                    kw_count,
-                    etv_val,
-                    paid_cost,
-                    kw_str,
-                    sv,
-                    rank,
-                    kw_etv,
-                ])
-
-            preview_lines.append("")
-            page_idx += 1
-
-        csv_bytes = buf.getvalue().encode()
-        bal_now = get_balance(uid)
-
-        preview_text = "\n".join(preview_lines) + f"\n💰 Списано {need_credits}. Баланс: {bal_now}"
-        await update.message.reply_text(
-            preview_text,
-            reply_markup=services_menu_keyboard(),
-        )
-        await update.message.reply_document(
-            document=InputFile(io.BytesIO(csv_bytes), filename=f"{target}_overview.csv"),
-            caption="CSV: сторінки сайту + ключі, по яких вони ранжуються"
-        )
+            await update.message.reply_document(
+                document=InputFile(io.BytesIO(csv_bytes), filename=f"{target}_overview.csv"),
+                caption="CSV: сторінки сайту + ключі, по яких вони ранжуються"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"Помилка: {e}")
         return
+
 
 async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     state = context.user_data.get("gap_state")
