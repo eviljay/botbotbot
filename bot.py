@@ -1281,7 +1281,7 @@ async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # language
-    if state == "language":
+    if state == "language": 
         if text not in SERP_LANGUAGES:
             await update.message.reply_text(
                 "Оберіть мову з кнопок нижче:",
