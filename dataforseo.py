@@ -239,7 +239,7 @@ class DataForSEO:
 
     
 
-# ========= KEYWORD GAP (Labs: domain_intersection) =========
+    # ========= KEYWORD GAP через ranked_keywords =========
     async def keywords_gap(
         self,
         target: str,
@@ -249,42 +249,106 @@ class DataForSEO:
         limit: int = 50,
     ) -> Dict[str, Any]:
         """
-        Keyword Gap на базі /v3/dataforseo_labs/google/domain_intersection/live
+        Keyword Gap на базі /v3/dataforseo_labs/google/ranked_keywords/live
 
         target — наш сайт (наприклад, "fotoklok.se")
         competitors — список доменів-конкурентів (до 3 шт.)
+        Повертаємо спрощену структуру:
+        {
+            "items": [
+                {
+                    "competitor": "onskefoto.se",
+                    "keyword": "fotobok",
+                    "search_volume": 4400,
+                    "position": 3,
+                },
+                ...
+            ]
+        }
         """
 
         comps = competitors[:3]
 
-        task: Dict[str, Any] = {
-            "target1": target,
+        # 1) Забираємо всі ключі, за якими ранжується target
+        target_task: Dict[str, Any] = {
+            "target": target,
             "include_subdomains": True,
             "search_partners": False,
             "location_code": location_code,
             "language_code": language_code,
-            "limit": limit,
+            "limit": 1000,  # скільки ключів нашого сайту беремо в базу
             "include_serp_info": True,
         }
 
-        intersections: List[str] = []
-        if len(comps) >= 1:
-            task["target2"] = comps[0]
-            intersections.append("target2")
-        if len(comps) >= 2:
-            task["target3"] = comps[1]
-            intersections.append("target3")
-        if len(comps) >= 3:
-            task["target4"] = comps[2]
-            intersections.append("target4")
-
-        if intersections:
-            task["intersections"] = intersections
-
-        return await self._post(
-            "/v3/dataforseo_labs/google/domain_intersection/live",
-            [task],
+        target_resp = await self._post(
+            "/v3/dataforseo_labs/google/ranked_keywords/live",
+            [target_task],
         )
+
+        target_keywords: set[str] = set()
+
+        for task in target_resp.get("tasks") or []:
+            for result in task.get("result") or []:
+                for item in result.get("items") or []:
+                    kw_data = item.get("keyword_data") or {}
+                    kw = kw_data.get("keyword")
+                    if kw:
+                        target_keywords.add(kw)
+
+        # 2) Для кожного конкурента збираємо ключі, яких немає в target_keywords
+        gap_items: List[Dict[str, Any]] = []
+
+        for comp in comps:
+            comp_task: Dict[str, Any] = {
+                "target": comp,
+                "include_subdomains": True,
+                "search_partners": False,
+                "location_code": location_code,
+                "language_code": language_code,
+                "limit": limit,
+                "include_serp_info": True,
+            }
+
+            comp_resp = await self._post(
+                "/v3/dataforseo_labs/google/ranked_keywords/live",
+                [comp_task],
+            )
+
+            for task in comp_resp.get("tasks") or []:
+                for result in task.get("result") or []:
+                    for item in result.get("items") or []:
+                        kw_data = item.get("keyword_data") or {}
+                        kw = kw_data.get("keyword")
+                        if not kw:
+                            continue
+
+                        # пропускаємо, якщо наш сайт вже ранжується за цим ключем
+                        if kw in target_keywords:
+                            continue
+
+                        kw_info = kw_data.get("keyword_info") or {}
+                        search_volume = kw_info.get("search_volume") or 0
+
+                        ranked_serp = item.get("ranked_serp_element") or {}
+                        serp_item = ranked_serp.get("serp_item") or {}
+                        # позиція: пробуємо rank_group, якщо немає — rank_absolute
+                        pos = (
+                            serp_item.get("rank_group")
+                            or serp_item.get("rank_absolute")
+                            or None
+                        )
+
+                        gap_items.append(
+                            {
+                                "competitor": comp,
+                                "keyword": kw,
+                                "search_volume": search_volume,
+                                "position": pos,
+                            }
+                        )
+
+        return {"items": gap_items}
+
 
 
     # ========= BACKLINKS =========

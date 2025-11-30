@@ -217,73 +217,46 @@ def build_keyword_gap_message(
     limit: int = 10,
 ) -> str:
     """
-    gap_response — відповідь від /keywords_gaps/live
-    target — наш домен (наприклад, "fotoklok.se")
-    limit — скільки ключів показати сумарно
+    Формує текст для Keyword Gap з спрощеної структури:
+    {
+        "items": [
+            {
+                "competitor": "...",
+                "keyword": "...",
+                "search_volume": ...,
+                "position": ...
+            },
+            ...
+        ]
+    }
     """
-
-    results = gap_response.get("result", [])
-    rows: List[Tuple[str, int, str, int]] = []  # (keyword, volume, competitor, comp_pos)
-
-    for block in results:
-        # на рівні блока часто є target1/target2 — але підстрахуємось
-        task_info = block.get("task", {})
-        competitor_domain = (
-            task_info.get("target1")
-            or block.get("target1")
-            or "конкурент"
-        )
-
-        for item in block.get("items", []):
-            kw_data = item.get("keyword_data", {})
-            keyword = kw_data.get("keyword")
-            kw_info = kw_data.get("keyword_info", {}) or {}
-            volume = kw_info.get("search_volume") or 0
-
-            # позиція конкурента (target1)
-            comp_pos = None
-            t1_serp = (
-                item.get("target1_serp_element")
-                or item.get("ranked_serp_element")
-            )
-            if isinstance(t1_serp, dict):
-                comp_pos = (
-                    t1_serp.get("rank_group")
-                    or t1_serp.get("rank_absolute")
-                )
-
-            # позиція нашого сайту (target2) — для missing GAP її, як правило, нема
-            t2_serp = item.get("target2_serp_element")
-            target_pos = None
-            if isinstance(t2_serp, dict):
-                target_pos = (
-                    t2_serp.get("rank_group")
-                    or t2_serp.get("rank_absolute")
-                )
-
-            # нас цікавлять саме ті ключі, де target не ранжується
-            if target_pos:
-                continue
-
-            if not keyword:
-                continue
-
-            rows.append((keyword, int(volume), competitor_domain, comp_pos or 0))
-
-    # Сортуємо за search volume по спаданню
-    rows.sort(key=lambda x: x[1], reverse=True)
-    rows = rows[:limit]
-
-    if not rows:
+    items = gap_response.get("items") or []
+    if not items:
         return "Нічого не знайшов 😕"
 
-    lines = ["⚔️ Keyword Gap"]
-    for keyword, volume, comp, comp_pos in rows:
+    # топ-ключі за пошуковим об’ємом
+    items_sorted = sorted(
+        items,
+        key=lambda x: x.get("search_volume") or 0,
+        reverse=True,
+    )[:limit]
+
+    lines: List[str] = [
+        f"⚔️ Keyword Gap\n(ключі є в конкурентів, але не в {target}):"
+    ]
+
+    for it in items_sorted:
+        kw = it.get("keyword", "")
+        vol = it.get("search_volume") or 0
+        pos = it.get("position") or "—"
+        comp = it.get("competitor") or "конкурент"
+
         lines.append(
-            f"• {keyword} — vol: {volume}, {comp}: {comp_pos}, vs {target}: –"
+            f"• {kw} — vol: {vol}, {comp}: {pos}, {target}: —"
         )
 
     return "\n".join(lines)
+
 
     def safe_keyword(item: Dict[str, Any]) -> Optional[str]:
         kd = item.get("keyword_data") or {}
@@ -1179,9 +1152,17 @@ async def start_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def handle_keyword_gap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
+    # 0) Беремо вибрані країну і мову з тих самих параметрів, що й для SERP
+    params = context.user_data.get("serp_params", {})
+
+    country_name = params.get("country", "Ukraine")      # дефолт як у SERP
+    language_name = params.get("language", "Ukrainian")  # дефолт як у SERP
+
+    location_code = LOCATION_CODES.get(country_name, 2840)   # 2840 — Ukraine
+    language_code = LANGUAGE_CODES.get(language_name, "uk")  # "uk" — українська
+
     # 1) Парсимо аргументи з команди
     # /gap fotoklok.se onskefoto.se smartphoto.se cewe.se
-    # context.args = ["fotoklok.se", "onskefoto.se", "smartphoto.se", "cewe.se"]
     args = context.args if hasattr(context, "args") else []
 
     if not args:
@@ -1210,7 +1191,7 @@ async def handle_keyword_gap(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if dom and dom != target:
                 competitors.append(dom)
 
-    # приберемо дублікати, але збережемо порядок
+    # прибираємо дублікати, але зберігаємо порядок
     competitors = list(dict.fromkeys(competitors))
 
     if not competitors:
@@ -1223,12 +1204,12 @@ async def handle_keyword_gap(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    # 2) тягнемо gap з dataforseo
+    # 2) тягнемо gap з dataforseo — вже з обраними location_code та language_code
     gap = await dataforseo.keywords_gap(
         target=target,
         competitors=competitors,
-        location_code=2752,  # якщо треба — винесемо в конфіг
-        language_code="sv",
+        location_code=location_code,
+        language_code=language_code,
         limit=50,
     )
 
@@ -1241,6 +1222,7 @@ async def handle_keyword_gap(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # 5) шлемо в Telegram
     await update.message.reply_text(text)
+
 
 
 
