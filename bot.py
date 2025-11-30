@@ -1205,7 +1205,7 @@ async def handle_keyword_gap(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     # 2) тягнемо gap з dataforseo — вже з обраними location_code та language_code
-    gap = await dataforseo.keywords_gap(
+    gap = await dfs.keywords_gap(
         target=target,
         competitors=competitors,
         location_code=location_code,
@@ -2232,7 +2232,7 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         )
 
         try:
-            resp = await dataforseo.keywords_gap(
+            resp = await dfs.keywords_gap(
                 target=target,
                 competitors=competitors,
                 location_code=location_code,
