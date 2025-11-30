@@ -624,7 +624,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cmd = parts[0]
 
     # --- Сервіси (інлайн) ---
-   if cmd == "svc":
+    if cmd == "svc":
         tool = parts[1] if len(parts) > 1 else ""
         if tool in ("backlinks_ov", "audit", "site_overview"):
             context.user_data["await_tool"] = tool
