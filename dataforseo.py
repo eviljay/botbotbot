@@ -58,7 +58,7 @@ class DataForSEO:
         depth: int = 10,
     ) -> Dict[str, Any]:
         """
-        /v3/serp/google/organic/live
+        /v3/serp/google/organic/live/advanced
         """
         task = {
             "keyword": keyword,
@@ -68,7 +68,6 @@ class DataForSEO:
             "depth": depth,
         }
         return await self._post("/v3/serp/google/organic/live/advanced", [task])
-
 
     async def suggest_landing_url(
         self,
@@ -80,8 +79,9 @@ class DataForSEO:
     ) -> str | None:
         """
         Підбір релевантної сторінки сайту для keyword'а.
+
         Логіка:
-        - робимо SERP по keyword
+        - робимо SERP по keyword (advanced)
         - шукаємо перший результат, де в URL є target_domain
         - повертаємо цей URL, або None якщо нічого не знайшли
         """
@@ -184,6 +184,7 @@ class DataForSEO:
             "language_code": language_code,
         }
         return await self._post("/v3/dataforseo_labs/google/keyword_difficulty/live", [task])
+
     # ========= LABS: RELEVANT PAGES + RANKED KEYWORDS =========
 
     async def relevant_pages(
@@ -238,7 +239,6 @@ class DataForSEO:
 
     # ========= KEYWORD GAP (Labs: domain_intersection) =========
 
-    # ========= KEYWORD GAP (Labs: domain_intersection) =========
     async def keywords_gap(
         self,
         target: str,
@@ -276,12 +276,10 @@ class DataForSEO:
             }
             tasks.append(task)
 
-        # НІЯКИХ api/function тут не має бути
         return await self._post(
             "/v3/dataforseo_labs/google/domain_intersection/live",
             tasks,
         )
-
 
     # ========= BACKLINKS =========
 
