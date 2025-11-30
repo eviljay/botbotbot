@@ -1405,9 +1405,10 @@ async def start_site_kw_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["sitekw_state"] = "target"
     context.user_data["sitekw"] = {}
     context.user_data.pop("await_tool", None)
+     kb = [[KeyboardButton("⬅️ Назад")]]
     await update.message.reply_text(
         "🌐 Ключі для сайту\n\nЦей тул виконує автоматичний підбрір ключів для сайта. Якщо треба підібрати семантику, то  введи домен або URL сайту, напр. `google.com`:",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True),
         parse_mode="Markdown",
     )
 
