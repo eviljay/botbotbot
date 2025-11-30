@@ -1585,10 +1585,11 @@ async def start_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["gap_state"] = "target"
     context.user_data["gap"] = {}
     context.user_data.pop("await_tool", None)
+    kb = [[KeyboardButton("⬅️ Назад")]]
     await update.message.reply_text(
         "⚔️ GAP\n\nВведи свій сайт (target), напр. `mydomain.com`:",
         parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True),
     )
 
 async def start_site_overview_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
