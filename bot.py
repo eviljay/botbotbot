@@ -1599,10 +1599,10 @@ async def start_site_overview_flow(update: Update, context: ContextTypes.DEFAULT
     context.user_data["siteov_state"] = "target"
     context.user_data["siteov"] = {}
     context.user_data.pop("await_tool", None)
-
+    kb = [[KeyboardButton("⬅️ Назад")]]
     await update.message.reply_text(
         "📈 Огляд сайту\n\nВведи домен або URL сайту, напр. `domain.net`:",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True),
         parse_mode="Markdown",
     )
 
