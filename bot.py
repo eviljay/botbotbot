@@ -1029,7 +1029,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         context.user_data["serp_state"] = "language"
         await update.message.reply_text(
             "Тепер оберіть мову пошуку:",
-            reply_markup=languages_keyboard(kb, resize_keyboard=True),
+            reply_markup=languages_keyboard(),
         )
         return
 
