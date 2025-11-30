@@ -244,62 +244,32 @@ class DataForSEO:
         location_code: int,
         language_code: str,
         limit: int = 50,
-    ) -> Dict[str, Any]:
+    ):
         """
-        Keyword Gap через /v3/dataforseo_labs/google/domain_intersection/live
-
-        Логіка:
-        - для кожного конкурента робимо окремий таск:
-          target1 = конкурент
-          target2 = наш сайт (target)
-        - intersections = False => повертає ключі, де target1 ранжується,
-          а target2 не має результатів у SERP.
-
-        У результаті ти отримаєш по кожному конкуренту:
-        - keyword_data (ключ, volume, cpc, monthly_searches тощо)
-        - first_domain_serp_element: rank_group, rank_absolute, url і т.д.
+        Keyword Gap через domain_intersection:
+        target1 = конкурент
+        target2 = наш сайт
+        intersections = False => показує ключі, по яких target1 ранжується, а target2 - ні.
         """
 
-        tasks: List[Dict[str, Any]] = []
+        tasks = []
 
-        # Обмежимося максимум 3 конкурентами, щоб не роздувати запит
         for comp in competitors[:3]:
-            tasks.append(
-                {
-                    "target1": comp,          # конкурент
-                    "target2": target,        # наш сайт
-                    "language_code": language_code,
-                    "location_code": location_code,
-                    "intersections": False,   # важливо: шукаємо GAP, а не перетин
-                    "limit": limit,
-                }
-            )
+            tasks.append({
+                "target1": comp,
+                "target2": target,
+                "language_code": language_code,
+                "location_code": location_code,
+                "include_subdomains": True,
+                "intersections": False,
+                "limit": limit
+            })
 
-        # Один POST із кількома тасками
         return await self._post(
             "/v3/dataforseo_labs/google/domain_intersection/live",
-            tasks,
+            tasks
         )
 
-    async def keyword_gap(
-        self,
-        target: str,
-        competitors: List[str],
-        location_code: int,
-        language_code: str,
-        limit: int = 50,
-    ) -> Dict[str, Any]:
-        """
-        Alias, щоб збігалося з викликами в боті.
-        Викликає keywords_gap().
-        """
-        return await self.keywords_gap(
-            target=target,
-            competitors=competitors,
-            location_code=location_code,
-            language_code=language_code,
-            limit=limit,
-        )
 
     # ========= BACKLINKS =========
 
