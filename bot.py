@@ -2750,10 +2750,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 bal_now = get_balance(uid)
 
                 preview_text = "\n💰 Списано {need_credits}. Баланс: {bal_now}"
-                await update.message.reply_text(
-                    preview_text,
-                    reply_markup=services_menu_keyboard(),
-                )
+                
                 await update.message.reply_document(
                     document=InputFile(io.BytesIO(csv_bytes), filename=f"{target}_overview.csv"),
                     caption="CSV: сторінки сайту + ключі, по яких вони ранжуються"
