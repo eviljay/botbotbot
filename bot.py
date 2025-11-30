@@ -461,10 +461,10 @@ def _provider_label(provider: str) -> str:
 
 def _topup_cta() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("💳 LiqPay", callback_data="open_amounts|liqpay")],
         [InlineKeyboardButton("🏦 WayForPay", callback_data="open_amounts|wayforpay")],
     ]
     return InlineKeyboardMarkup(rows)
+
 
 
 def _parse_opts(line: str) -> Tuple[str, dict]:
