@@ -358,6 +358,7 @@ def countries_keyboard() -> ReplyKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
+        rows.append([KeyboardButton("⬅️ Назад")])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
@@ -371,6 +372,7 @@ def languages_keyboard() -> ReplyKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
+        rows.append([KeyboardButton("⬅️ Назад")])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
