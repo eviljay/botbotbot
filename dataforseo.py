@@ -256,8 +256,8 @@ class DataForSEO:
 
         for comp in competitors[:3]:
             tasks.append({
-                "target1": comp,
-                "target2": target,
+                "target1": comp,          # конкурент
+                "target2": target,        # наш сайт (fotoklok.se)
                 "language_code": language_code,
                 "location_code": location_code,
                 "include_subdomains": True,
@@ -269,7 +269,6 @@ class DataForSEO:
             "/v3/dataforseo_labs/google/domain_intersection/live",
             tasks
         )
-
 
     # ========= BACKLINKS =========
 

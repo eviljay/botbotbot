@@ -210,6 +210,39 @@ LANGUAGE_CODES = {
     "English": "en",
 }
 
+def build_keyword_gap_message(gap_response: dict, target: str) -> str:
+    lines = ["⚔️ Keyword Gap"]
+
+    tasks = gap_response.get("tasks", [])
+
+    for task in tasks:
+        result = task.get("result", [])
+        for r in result:
+            competitor = r.get("target1")
+            items = r.get("items", [])
+
+            for item in items[:10]:  # топ-10 ключів
+                kd = item.get("keyword_data", {}) or {}
+                kw = kd.get("keyword", "")
+
+                info = kd.get("keyword_info", {}) or {}
+                vol = info.get("search_volume", "")
+
+                serp = (
+                    item.get("first_domain_serp_element")
+                    or item.get("target1_serp_element")
+                    or {}
+                )
+                pos = serp.get("rank_group", "")
+
+                lines.append(
+                    f"• {kw} — vol:{vol}, місце:{pos}, vs {target}: — ({competitor})"
+                )
+
+    if len(lines) == 1:
+        lines.append("нема gap-ключів")
+
+    return "\n".join(lines)
 
 def countries_keyboard() -> ReplyKeyboardMarkup:
     rows = []
@@ -1012,6 +1045,34 @@ async def start_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
+async def handle_keyword_gap(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
+    target = "fotoklok.se"
+    competitors = ["onskefoto.se", "smartphoto.se", "cewe.se"]
+
+    # 1) тягнемо gap з dataforseo
+    gap = await dataforseo.keywords_gap(
+        target=target,
+        competitors=competitors,
+        location_code=2752,
+        language_code="sv",
+        limit=50,
+    )
+
+    # 2) будуємо текст через нашу функцію
+    text = build_keyword_gap_message(gap, target)
+
+    # 3) додаємо інформацію про баланс
+    balance = await get_balance(chat_id)  # або як у тебе це називається
+    text += f"\n\n💰 Списано 1. Баланс: {balance}"
+
+    # 4) шлемо в Telegram
+    await update.message.reply_text(text)
+
+
+
+
 async def handle_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     state = context.user_data.get("kwideas_state")
     data = context.user_data.get("kwideas") or {}
@@ -1641,39 +1702,7 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
             await update.message.reply_text(f"Помилка: {e}")
         return
 
-def build_keyword_gap_message(gap_response: dict, target: str) -> str:
-    lines = ["⚔️ Keyword Gap"]
 
-    tasks = gap_response.get("tasks", [])
-
-    for task in tasks:
-        result = task.get("result", [])
-        for r in result:
-            competitor = r.get("target1")
-            items = r.get("items", [])
-
-            for item in items[:10]:  # топ-10 ключів
-                kd = item.get("keyword_data", {}) or {}
-                kw = kd.get("keyword", "")
-
-                info = kd.get("keyword_info", {}) or {}
-                vol = info.get("search_volume", "")
-
-                serp = (
-                    item.get("first_domain_serp_element")
-                    or item.get("target1_serp_element")
-                    or {}
-                )
-                pos = serp.get("rank_group", "")
-
-                lines.append(
-                    f"• {kw} — vol:{vol}, місце:{pos}, vs {target}: — ({competitor})"
-                )
-
-    if len(lines) == 1:
-        lines.append("нема gap-ключів")
-
-    return "\n".join(lines)
 
 
 async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
