@@ -768,7 +768,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prompts = {
                 "backlinks_ov": "🔗 Backlinks огляд: введіть домен: `mydomain.com`",
                 "audit": "🛠️ Аудит: введіть URL: `https://example.com/page`",
-                "site_overview": "📈 Огляд сайту: `wildfortune.net | country=United States | lang=English | pages=5 | limit=10`",
+                "site_overview": "📈 Огляд сайту: `domain.net | country=United States | lang=English | pages=5 | limit=10`",
             }
             text = prompts.get(tool, "Надішліть параметри в одному рядку.")
             return await query.edit_message_text(
@@ -1424,7 +1424,7 @@ async def handle_site_kw_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
     if state == "target":
         target = text.strip()
         if not target:
-            await update.message.reply_text("Введи домен або URL сайту, напр. `wildfortune.net`:", parse_mode="Markdown")
+            await update.message.reply_text("Введи домен або URL сайту, напр. `domain.net`:", parse_mode="Markdown")
             return
         data["target"] = target
         context.user_data["sitekw"] = data
@@ -1593,7 +1593,7 @@ async def start_site_overview_flow(update: Update, context: ContextTypes.DEFAULT
     context.user_data.pop("await_tool", None)
 
     await update.message.reply_text(
-        "📈 Огляд сайту\n\nВведи домен або URL сайту, напр. `wildfortune.net`:",
+        "📈 Огляд сайту\n\nВведи домен або URL сайту, напр. `domain.net`:",
         reply_markup=ReplyKeyboardRemove(),
         parse_mode="Markdown",
     )
@@ -2147,7 +2147,7 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         context.user_data["gap"] = data
         context.user_data["gap_state"] = "competitors"
         await update.message.reply_text(
-            "Тепер введи конкурентів через кому, напр.: `site1.com, site2.com, site3.com`",
+            "Тепер введи конкурентів через кому, напр.: `site1.com`",
             parse_mode="Markdown",
         )
         return
@@ -2157,7 +2157,7 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         raw = text.strip()
         if not raw:
             await update.message.reply_text(
-                "Введи хоча б одного конкурента через кому, напр.: `site1.com, site2.com`",
+                "Введи хоча б одного конкурента через кому, напр.: `site1.com`",
                 parse_mode="Markdown",
             )
             return
