@@ -1147,6 +1147,8 @@ async def start_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["kwideas_state"] = "keyword"
     context.user_data["kwideas"] = {}
     context.user_data.pop("await_tool", None)
+    # Кнопка назад у Reply Keyboard
+    kb = [[KeyboardButton("⬅️ Назад")]]
     await update.message.reply_text(
         "🧠 Keyword Ideas\n\nВведи seed keyword:",
         reply_markup=ReplyKeyboardRemove(),
