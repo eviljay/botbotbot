@@ -246,37 +246,40 @@ class DataForSEO:
         limit: int = 50,
     ) -> Dict[str, Any]:
         """
-        /v3/dataforseo_labs/google/domain_intersection/live
+        Keyword Gap через /v3/dataforseo_labs/google/domain_intersection/live
 
-        target1 — наш домен
-        target2..4 — конкуренти
-        intersections — з ким робити перетин.
+        Логіка:
+        - для кожного конкурента робимо окремий таск:
+          target1 = конкурент
+          target2 = наш сайт (target)
+        - intersections = False => повертає ключі, де target1 ранжується,
+          а target2 не має результатів у SERP.
+
+        У результаті ти отримаєш по кожному конкуренту:
+        - keyword_data (ключ, volume, cpc, monthly_searches тощо)
+        - first_domain_serp_element: rank_group, rank_absolute, url і т.д.
         """
-        comps = competitors[:3]
-        task: Dict[str, Any] = {
-            "target1": target,
-            "include_subdomains": True,
-            "search_partners": False,
-            "location_code": location_code,
-            "language_code": language_code,
-            "limit": limit,
-        }
-        intersections: List[str] = []
 
-        if len(comps) >= 1:
-            task["target2"] = comps[0]
-            intersections.append("target2")
-        if len(comps) >= 2:
-            task["target3"] = comps[1]
-            intersections.append("target3")
-        if len(comps) >= 3:
-            task["target4"] = comps[2]
-            intersections.append("target4")
+        tasks: List[Dict[str, Any]] = []
 
-        if intersections:
-            task["intersections"] = intersections
+        # Обмежимося максимум 3 конкурентами, щоб не роздувати запит
+        for comp in competitors[:3]:
+            tasks.append(
+                {
+                    "target1": comp,          # конкурент
+                    "target2": target,        # наш сайт
+                    "language_code": language_code,
+                    "location_code": location_code,
+                    "intersections": False,   # важливо: шукаємо GAP, а не перетин
+                    "limit": limit,
+                }
+            )
 
-        return await self._post("/v3/dataforseo_labs/google/domain_intersection/live", [task])
+        # Один POST із кількома тасками
+        return await self._post(
+            "/v3/dataforseo_labs/google/domain_intersection/live",
+            tasks,
+        )
 
     async def keyword_gap(
         self,
