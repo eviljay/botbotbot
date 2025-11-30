@@ -1787,8 +1787,7 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
                 "etv",
             ])
 
-            preview_lines = [f"📈 Огляд сайту {target} ({country_name}, {language_name})\n"]
-            page_idx = 1
+            
 
             for p in pages[:pages_limit]:
                 page_url = p.get("page_address") or ""
@@ -1812,10 +1811,7 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
                 except Exception:
                     kw_items = []
 
-                preview_lines.append(
-                    f"{page_idx}. {page_url}\n"
-                    f"   keywords: {kw_count}, ETV: {etv_val:.2f}, paid_est: {paid_cost:.2f}"
-                )
+                 
 
                 for kw_item in kw_items[:3]:
                     kd = kw_item.get("keyword_data") or {}
@@ -1848,15 +1844,20 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
                         kw_etv,
                     ])
 
-                preview_lines.append("")
-                page_idx += 1
+                 
 
             csv_bytes = buf.getvalue().encode()
             bal_now = get_balance(uid)
 
-            preview_text = "\n".join(preview_lines) + f"\n💰 Списано {need_credits}. Баланс: {bal_now}"
+            short_text = (
+                    f"📈 Огляд сайту {target} ({country_name}, {language_name})\n\n"
+                    f"Готово! Повний звіт можна скачати у вигляді CSV-файлу нижче 👇\n\n"
+                    f"💰 Списано {need_credits}. Баланс: {bal_now}"
+                )
+
+                
             await update.message.reply_text(
-                preview_text,
+                short_text,
                 reply_markup=services_menu_keyboard(),
             )
             await update.message.reply_document(
