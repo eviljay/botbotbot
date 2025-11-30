@@ -9,7 +9,7 @@ import zipfile
 import asyncio
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse
-
+from typing import Dict, Any
 from dotenv import load_dotenv
 from httpx import AsyncClient, ConnectError, HTTPError
 from html import escape
