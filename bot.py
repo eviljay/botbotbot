@@ -62,11 +62,6 @@ def _parse_int_env(name: str, default: int) -> int:
     except Exception:
         return int(default)
 
-def back_btn(to: str = "main") -> List[InlineKeyboardButton]:
-    """
-    Кнопка назад: повертає до callback 'to'
-    """
-    return [InlineKeyboardButton("⬅️ Назад", callback_data=f"back|{to}")]
 
 def _parse_int_list_env(name: str, fallback: str = "100,250,500") -> List[int]:
     raw = os.getenv(name, fallback)
@@ -363,10 +358,6 @@ def countries_keyboard() -> ReplyKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
-
-    # рядок "Назад"
-    rows.append([KeyboardButton("⬅️ Назад")])
-
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
@@ -380,10 +371,6 @@ def languages_keyboard() -> ReplyKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
-
-    # рядок "Назад"
-    rows.append([KeyboardButton("⬅️ Назад")])
-
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
@@ -1053,14 +1040,10 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         params["language"] = text
         context.user_data["serp_params"] = params
         context.user_data["serp_state"] = "depth"
-
-      rows = [[KeyboardButton("10"), KeyboardButton("20"), KeyboardButton("30"), KeyboardButton("100")]]
-        rows.append([KeyboardButton("⬅️ Назад")])
-
         await update.message.reply_text(
             "Глибина SERP: обери 10, 20 або 30 або 100.",
             reply_markup=ReplyKeyboardMarkup(
-                rows,
+                [[KeyboardButton("10"), KeyboardButton("20"), KeyboardButton("30"), KeyboardButton("100")]],
                 resize_keyboard=True,
             ),
         )
@@ -1480,13 +1463,10 @@ async def handle_site_kw_flow(update: Update, context: ContextTypes.DEFAULT_TYPE
         data["language"] = text
         context.user_data["sitekw"] = data
         context.user_data["sitekw_state"] = "limit"
-         rows = [[KeyboardButton("20"), KeyboardButton("50"), KeyboardButton("100")]]
-        rows.append([KeyboardButton("⬅️ Назад")])
-
         await update.message.reply_text(
-           "Скільки ключів зібрати? Обери 20, 50 або 100.",
+            "Скільки ключів зібрати? Обери 20, 50 або 100.",
             reply_markup=ReplyKeyboardMarkup(
-                rows,
+                [[KeyboardButton("20"), KeyboardButton("50"), KeyboardButton("100")]],
                 resize_keyboard=True,
             ),
         )
@@ -1684,12 +1664,10 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
         context.user_data["siteov_state"] = "pages"
 
         page_options = [["5", "10", "15"], ["20", "25"], ["50", "100"]]
-        rows = [[KeyboardButton(x) for x in row] for row in page_options]
-        rows.append([KeyboardButton("⬅️ Назад")])
         await update.message.reply_text(
             "Скільки топ-сторінок взяти з сайту?",
-             reply_markup=ReplyKeyboardMarkup(
-                rows,
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton(x) for x in row] for row in page_options],
                 resize_keyboard=True,
             ),
         )
@@ -1713,12 +1691,10 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
         context.user_data["siteov_state"] = "limit"
 
         limit_options = [["5", "10", "15"], ["20", "25"], ["50", "100"]]
-        rows = [[KeyboardButton(x) for x in row] for row in limit_options]
-        rows.append([KeyboardButton("⬅️ Назад")])
         await update.message.reply_text(
-           "Скільки ключів на сторінку збирати?",
+            "Скільки ключів на сторінку збирати?",
             reply_markup=ReplyKeyboardMarkup(
-                rows,
+                [[KeyboardButton(x) for x in row] for row in limit_options],
                 resize_keyboard=True,
             ),
         )
@@ -1798,7 +1774,7 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
                 "Ключове слово",
                 "Пошуковий об’єм",
                 "Позиція в Google",
-                "Оціночний трафік ключа",
+                "etv",
             ])
 
             preview_lines = [f"📈 Огляд сайту {target} ({country_name}, {language_name})\n"]
