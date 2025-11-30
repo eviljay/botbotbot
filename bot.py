@@ -2125,6 +2125,8 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
                 document=InputFile(io.BytesIO(csv_bytes), filename=f"{target}_overview.csv"),
                 caption="CSV: сторінки сайту + ключі, по яких вони ранжуються"
             )
+        except Exception as e:
+            await update.message.reply_text(f"Помилка: {e}")
         return
 
 
@@ -2747,7 +2749,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 csv_bytes = buf.getvalue().encode()
                 bal_now = get_balance(uid)
 
-                preview_text = "\n".join(preview_lines) + f"\n💰 Списано {need_credits}. Баланс: {bal_now}"
+                preview_text = "\n" f"\n💰 Списано {need_credits}. Баланс: {bal_now}"
                 await update.message.reply_text(
                     preview_text,
                     reply_markup=services_menu_keyboard(),
