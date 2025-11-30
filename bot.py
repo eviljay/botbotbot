@@ -1580,7 +1580,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Швидкий вибір сервісу (reply-кнопки)
-        if text in ("🔍 SERP", "🧠 Keyword Ideas", "🌐 Ключі для сайту", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит", "📈 Огляд сайту"):
+    if text in ("🔍 SERP", "🧠 Keyword Ideas", "🌐 Ключі для сайту", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит", "📈 Огляд сайту"):
         if text == "🔍 SERP":
             await _start_serp_flow(update, context)
             return
