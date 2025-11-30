@@ -2125,8 +2125,6 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
                 document=InputFile(io.BytesIO(csv_bytes), filename=f"{target}_overview.csv"),
                 caption="CSV: сторінки сайту + ключі, по яких вони ранжуються"
             )
-        except Exception as e:
-            await update.message.reply_text(f"Помилка: {e}")
         return
 
 
