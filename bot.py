@@ -1767,14 +1767,14 @@ async def handle_site_overview_flow(update: Update, context: ContextTypes.DEFAUL
             buf = io.StringIO()
             w = csv.writer(buf)
             w.writerow([
-                "page_url",
-                "organic_keywords_count",
-                "organic_etv",
-                "organic_estimated_paid_traffic_cost",
-                "keyword",
-                "search_volume",
-                "rank",
-                "etv",
+                "URL сторінки",
+                "Кількість ключів у ТОП-100",
+                "Оціночний органічний трафік",
+                "Вартість трафіку",
+                "Ключове слово",
+                "Пошуковий об’єм",
+                "Позиція в Google",
+                "Оціночний трафік ключа",
             ])
 
             preview_lines = [f"📈 Огляд сайту {target} ({country_name}, {language_name})\n"]
