@@ -2749,7 +2749,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 csv_bytes = buf.getvalue().encode()
                 bal_now = get_balance(uid)
 
-                preview_text = "\n" f"\n💰 Списано {need_credits}. Баланс: {bal_now}"
+                preview_text = "\n💰 Списано {need_credits}. Баланс: {bal_now}"
                 await update.message.reply_text(
                     preview_text,
                     reply_markup=services_menu_keyboard(),
