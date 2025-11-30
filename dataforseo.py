@@ -237,6 +237,7 @@ class DataForSEO:
 
     # ========= KEYWORD GAP (Labs: domain_intersection) =========
 
+    # ========= KEYWORD GAP (Labs: domain_intersection) =========
     async def keywords_gap(
         self,
         target: str,
@@ -244,31 +245,47 @@ class DataForSEO:
         location_code: int,
         language_code: str,
         limit: int = 50,
-    ):
+    ) -> Dict[str, Any]:
         """
-        Keyword Gap через domain_intersection:
-        target1 = конкурент
-        target2 = наш сайт
-        intersections = False => показує ключі, по яких target1 ранжується, а target2 - ні.
+        Keyword Gap на базі /v3/dataforseo_labs/google/domain_intersection/live
+
+        target — наш сайт (наприклад, "fotoklok.se")
+        competitors — список доменів-конкурентів (до 3 шт.)
         """
 
-        tasks = []
+        comps = competitors[:3]
 
-        for comp in competitors[:3]:
-            tasks.append({
-                "target1": comp,          # конкурент
-                "target2": target,        # наш сайт (fotoklok.se)
-                "language_code": language_code,
-                "location_code": location_code,
-                "include_subdomains": True,
-                "intersections": False,
-                "limit": limit
-            })
+        task: Dict[str, Any] = {
+            "target1": target,
+            "include_subdomains": True,
+            "search_partners": False,
+            "location_code": location_code,
+            "language_code": language_code,
+            "limit": limit,
+            # serp_info нам не критично, позиції беремо з *_domain_serp_element
+            "include_serp_info": False,
+        }
+
+        intersections: List[str] = []
+        if len(comps) >= 1:
+            task["target2"] = comps[0]
+            intersections.append("target2")
+        if len(comps) >= 2:
+            task["target3"] = comps[1]
+            intersections.append("target3")
+        if len(comps) >= 3:
+            task["target4"] = comps[2]
+            intersections.append("target4")
+
+        # перетин з усіма переданими конкурентами
+        if intersections:
+            task["intersections"] = intersections
 
         return await self._post(
             "/v3/dataforseo_labs/google/domain_intersection/live",
-            tasks
+            [task],
         )
+
 
     # ========= BACKLINKS =========
 

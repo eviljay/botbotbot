@@ -210,39 +210,115 @@ LANGUAGE_CODES = {
     "English": "en",
 }
 
-def build_keyword_gap_message(gap_response: dict, target: str) -> str:
-    lines = ["⚔️ Keyword Gap"]
+def build_keyword_gap_message(gap_response: Dict[str, Any], target: str, limit: int = 10) -> str:
+    """
+    Формує текст для keyword gap на базі відповіді
+    /v3/dataforseo_labs/google/domain_intersection/live
+    """
+    tasks = gap_response.get("tasks") or []
+    if not tasks:
+        return "⚔️ Keyword Gap\n\nНемає даних від DataForSEO."
 
-    tasks = gap_response.get("tasks", [])
+    first_task = tasks[0] or {}
+    results = first_task.get("result") or []
+    if not results:
+        return "⚔️ Keyword Gap\n\nDataForSEO нічого не повернув по цьому запиту."
 
-    for task in tasks:
-        result = task.get("result", [])
-        for r in result:
-            competitor = r.get("target1")
-            items = r.get("items", [])
+    first_result = results[0] or {}
+    items = first_result.get("items") or []
 
-            for item in items[:10]:  # топ-10 ключів
-                kd = item.get("keyword_data", {}) or {}
-                kw = kd.get("keyword", "")
+    if not items:
+        return "⚔️ Keyword Gap\n\nНемає ключових слів у перетині з конкурентами."
 
-                info = kd.get("keyword_info", {}) or {}
-                vol = info.get("search_volume", "")
+    def safe_keyword(item: Dict[str, Any]) -> Optional[str]:
+        kd = item.get("keyword_data") or {}
+        kw = kd.get("keyword")
+        if isinstance(kw, str) and kw:
+            return kw
+        # fallback: інколи ключ лежить прямо в item['keyword']
+        kw = item.get("keyword")
+        if isinstance(kw, str) and kw:
+            return kw
+        # крайній варіант — пошук по вкладених dict
+        for v in kd.values():
+            if isinstance(v, dict) and isinstance(v.get("keyword"), str):
+                return v["keyword"]
+        return None
 
-                serp = (
-                    item.get("first_domain_serp_element")
-                    or item.get("target1_serp_element")
-                    or {}
-                )
-                pos = serp.get("rank_group", "")
+    def safe_volume(item: Dict[str, Any]) -> Optional[int]:
+        kd = item.get("keyword_data") or {}
+        ki = kd.get("keyword_info") or {}
+        vol = ki.get("search_volume")
+        if isinstance(vol, (int, float)):
+            return int(vol)
+        # клікстрім-варіант, якщо раптом такий
+        cki = kd.get("clickstream_keyword_info") or {}
+        vol = cki.get("search_volume")
+        if isinstance(vol, (int, float)):
+            return int(vol)
+        # запасний варіант
+        vol = item.get("search_volume")
+        if isinstance(vol, (int, float)):
+            return int(vol)
+        return None
 
-                lines.append(
-                    f"• {kw} — vol:{vol}, місце:{pos}, vs {target}: — ({competitor})"
-                )
+    def safe_position_for_target(item: Dict[str, Any]) -> Optional[int]:
+        # 1) пробуємо наш домен у first_domain_serp_element / target1_serp_element
+        fd = item.get("first_domain_serp_element") or item.get("target1_serp_element") or {}
+        if isinstance(fd, dict):
+            pos = fd.get("rank_group")
+            if isinstance(pos, int):
+                return pos
+        # 2) fallback — second_domain_serp_element / target2_serp_element
+        sd = item.get("second_domain_serp_element") or item.get("target2_serp_element") or {}
+        if isinstance(sd, dict):
+            pos = sd.get("rank_group")
+            if isinstance(pos, int):
+                return pos
+        return None
+
+    def competitor_domains(item: Dict[str, Any]) -> str:
+        domains: List[str] = []
+        for key in (
+            "second_domain_serp_element",
+            "third_domain_serp_element",
+            "fourth_domain_serp_element",
+            "target2_serp_element",
+            "target3_serp_element",
+            "target4_serp_element",
+        ):
+            el = item.get(key)
+            if isinstance(el, dict):
+                d = el.get("domain")
+                if isinstance(d, str):
+                    domains.append(d)
+        domains = sorted(set(domains))
+        return ", ".join(domains) if domains else "конкуренти"
+
+    lines: List[str] = ["⚔️ Keyword Gap"]
+    for idx, item in enumerate(items[:limit], start=1):
+        kw = safe_keyword(item)
+        vol = safe_volume(item)
+        pos = safe_position_for_target(item)
+        comps = competitor_domains(item)
+
+        # Якщо взагалі нічого корисного немає – пропускаємо
+        if not kw and vol is None and pos is None:
+            continue
+
+        vol_str = str(vol) if vol is not None else "—"
+        pos_str = str(pos) if pos is not None else "—"
+        kw_str = kw or "—"
+
+        lines.append(
+            f"• {kw_str} — vol: {vol_str}, місце: {pos_str}, vs {target}: ({comps})"
+        )
 
     if len(lines) == 1:
-        lines.append("нема gap-ключів")
+        lines.append("Немає ключових слів для відображення.")
 
     return "\n".join(lines)
+
 
 def countries_keyboard() -> ReplyKeyboardMarkup:
     rows = []
@@ -1048,27 +1124,69 @@ async def start_kwideas_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def handle_keyword_gap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    target = "fotoklok.se"
-    competitors = ["onskefoto.se", "smartphoto.se", "cewe.se"]
+    # 1) Парсимо аргументи з команди
+    # /gap fotoklok.se onskefoto.se smartphoto.se cewe.se
+    # context.args = ["fotoklok.se", "onskefoto.se", "smartphoto.se", "cewe.se"]
+    args = context.args if hasattr(context, "args") else []
 
-    # 1) тягнемо gap з dataforseo
+    if not args:
+        await update.message.reply_text(
+            "⚔️ Keyword Gap\n\n"
+            "Будь ласка, введи домени так:\n"
+            "`/gap ваш-сайт.se конкурент1.se конкурент2.se конкурент3.se`\n"
+            "або:\n"
+            "`/gap ваш-сайт.se конкурент1.se, конкурент2.se, конкурент3.se`",
+            parse_mode="Markdown",
+        )
+        return
+
+    # перший аргумент — наш сайт (target)
+    target = args[0].strip().lower()
+
+    # все, що після першого аргументу — конкуренти (можуть бути через пробіли або коми)
+    raw_competitors = " ".join(args[1:]).strip()
+
+    competitors: list[str] = []
+    if raw_competitors:
+        # Міняємо ; на , про всяк випадок
+        raw_competitors = raw_competitors.replace(";", ",")
+        for chunk in raw_competitors.split(","):
+            dom = chunk.strip().lower()
+            if dom and dom != target:
+                competitors.append(dom)
+
+    # приберемо дублікати, але збережемо порядок
+    competitors = list(dict.fromkeys(competitors))
+
+    if not competitors:
+        await update.message.reply_text(
+            "⚔️ Keyword Gap\n\n"
+            "Потрібен хоча б один конкурент.\n"
+            "Приклад:\n"
+            "`/gap fotoklok.se onskefoto.se smartphoto.se cewe.se`",
+            parse_mode="Markdown",
+        )
+        return
+
+    # 2) тягнемо gap з dataforseo
     gap = await dataforseo.keywords_gap(
         target=target,
         competitors=competitors,
-        location_code=2752,
+        location_code=2752,  # якщо треба — винесемо в конфіг
         language_code="sv",
         limit=50,
     )
 
-    # 2) будуємо текст через нашу функцію
-    text = build_keyword_gap_message(gap, target)
+    # 3) будуємо текст через нашу функцію
+    text = build_keyword_gap_message(gap, target=target, limit=10)
 
-    # 3) додаємо інформацію про баланс
-    balance = await get_balance(chat_id)  # або як у тебе це називається
+    # 4) додаємо інформацію про баланс
+    balance = await get_balance(chat_id)  # твоя існуюча функція
     text += f"\n\n💰 Списано 1. Баланс: {balance}"
 
-    # 4) шлемо в Telegram
+    # 5) шлемо в Telegram
     await update.message.reply_text(text)
+
 
 
 
