@@ -1012,7 +1012,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         context.user_data["serp_state"] = "country"
         await update.message.reply_text(
             "Оберіть країну для пошуку:",
-            reply_markup=countries_keyboard(kb, resize_keyboard=True),
+            reply_markup=countries_keyboard(),
         )
         return
 
