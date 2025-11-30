@@ -461,10 +461,10 @@ def _provider_label(provider: str) -> str:
 
 def _topup_cta() -> InlineKeyboardMarkup:
     rows = [
+        #[InlineKeyboardButton("💳 LiqPay", callback_data="open_amounts|liqpay")],
         [InlineKeyboardButton("🏦 WayForPay", callback_data="open_amounts|wayforpay")],
     ]
     return InlineKeyboardMarkup(rows)
-
 
 
 def _parse_opts(line: str) -> Tuple[str, dict]:
@@ -547,7 +547,7 @@ def _build_topup_amounts_kb(provider: str) -> InlineKeyboardMarkup:
 
 def _providers_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 LiqPay", callback_data="open_amounts|liqpay")],
+        #[InlineKeyboardButton("💳 LiqPay", callback_data="open_amounts|liqpay")],
         [InlineKeyboardButton("🏦 WayForPay", callback_data="open_amounts|wayforpay")],
     ])
 
@@ -622,10 +622,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = (
-        "Привіт! Я SEO-бот з балансом.\n\n"
+        "Привіт! Я SEO-бот який вміє багато корисних речей які стануть у нагоді SEO спеціалісту.\n\n"
         "Меню:\n"
         "🧰 Сервіси — SERP, Keywords, Gap, Backlinks, Audit, Ключі для сайту\n"
-        "💳 Поповнити — LiqPay або WayForPay\n"
+        "💳 Поповнити —  WayForPay\n"
         "📊 Баланс — ваші кредити\n"
         "📱 Реєстрація — додати телефон (новим — бонус)\n\n"
         f"Статус реєстрації: {reg_text}\n"
