@@ -34,7 +34,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-
+BACK_TEXT = "⬅️ Назад"
 # ====== Локальні модулі ======
 from dao import init_db, ensure_user, get_balance, charge, get_phone, register_or_update_phone
 from dataforseo import DataForSEO
@@ -977,9 +977,13 @@ async def _start_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["serp_state"] = "keyword"
     context.user_data["serp_params"] = {}
     context.user_data.pop("await_tool", None)
+
+    # Кнопка назад у Reply Keyboard
+    kb = [[KeyboardButton("⬅️ Назад")]]
+
     await update.message.reply_text(
         "🔍 SERP трекінг\n\nВведи keyword, який хочеш перевірити в Google:",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
     )
 
 
