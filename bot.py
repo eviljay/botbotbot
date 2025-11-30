@@ -2232,9 +2232,9 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         )
 
         try:
-            resp = await dfs.keywords_gap(
-                target,
-                competitors,
+            resp = await dataforseo.keywords_gap(
+                target=target,
+                competitors=competitors,
                 location_code=location_code,
                 language_code=language_code,
                 limit=50,
@@ -2244,24 +2244,57 @@ async def handle_gap_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, te
             await update.message.reply_text(f"Помилка від DataForSEO: {e}")
             return
 
+        # === НОВИЙ парсер відповіді domain_intersection ===
         tasks = resp.get("tasks") or []
-        rows = []
+        rows: List[Tuple[str, int | str, str | int | str, str, str | int | str]] = []
+
         for t in tasks:
-            result = t.get("result") or []
-            if not result:
+            result_list = t.get("result") or []
+            if not result_list:
                 continue
-            r0 = result[0]
+
+            r0 = result_list[0] or {}
             items = r0.get("items") or []
+            if not items:
+                continue
+
             data_block = t.get("data") or {}
-            intersections = data_block.get("intersections") or []
-            comp_label = intersections[0] if intersections else "target2"
-            comp_name = data_block.get(comp_label) or "competitor"
+            # ми відправляємо target1 = конкурент, target2 = наш сайт
+            comp_name = data_block.get("target1") or "competitor"
+            # our_domain = data_block.get("target2") or target  # якщо раптом треба
+
             for it in items:
-                kw = it.get("keyword") or it.get("keyword_text") or ""
-                vol = it.get("search_volume") or it.get("avg_monthly_searches") or ""
-                my_rank = it.get("rank1") or it.get("target_rank") or it.get("rank") or ""
-                comp_rank = it.get("rank2") or ""
-                rows.append((kw, vol, my_rank, comp_name, comp_rank))
+                kd = it.get("keyword_data") or {}
+                kw = kd.get("keyword") or it.get("keyword") or ""
+                if not kw:
+                    continue
+
+                ki = kd.get("keyword_info") or {}
+                vol = (
+                    ki.get("search_volume")
+                    or it.get("search_volume")
+                    or 0
+                )
+
+                first = it.get("first_domain_serp_element") or {}
+                second = it.get("second_domain_serp_element") or {}
+
+                # target1 = конкурент → його позиція в first_domain_serp_element
+                comp_rank = (
+                    first.get("rank_group")
+                    or first.get("rank_absolute")
+                    or ""
+                )
+
+                # при intersections=false target2 часто взагалі не ранжується
+                our_rank = (
+                    second.get("rank_group")
+                    or second.get("rank_absolute")
+                    or ""
+                )
+
+                rows.append((kw, vol, our_rank, comp_name, comp_rank))
+
 
         if not rows:
             bal_now = get_balance(uid)

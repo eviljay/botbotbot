@@ -22,6 +22,51 @@ class DataForSEO:
             "Authorization": "Basic " + base64.b64encode(auth_bytes).decode("utf-8"),
             "Content-Type": "application/json",
         }
+    def parse_keyword_gap_domain_intersection(
+    resp: dict,
+    our_domain: str,
+    competitor_domain: str,
+):
+    rows = []
+
+    tasks = resp.get("tasks") or []
+    if not tasks:
+        return rows
+
+    t0 = tasks[0] or {}
+    result_list = t0.get("result") or []
+    if not result_list:
+        return rows
+
+    r0 = result_list[0] or {}
+    items = r0.get("items") or []
+    if not items:
+        return rows
+
+    for it in items:
+        kd = it.get("keyword_data") or {}
+        kw = kd.get("keyword") or ""
+
+        kw_info = (kd.get("keyword_info") or {})
+        search_volume = kw_info.get("search_volume") or ""
+
+        first = it.get("first_domain_serp_element") or {}
+        # при intersections=false ранжується тільки target1 (конкурент)
+        competitor_rank = first.get("rank_group") or first.get("rank_absolute") or ""
+
+        row = {
+            "keyword": kw,
+            "search_volume": search_volume,
+            "our_rank": "",                # ми не ранжуємось
+            "competitor": competitor_domain,
+            "competitor_rank": competitor_rank,
+        }
+        rows.append(row)
+
+    return rows
+
+
+
 
     async def _post(self, path: str, payload: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
