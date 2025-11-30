@@ -8,6 +8,7 @@ import sqlite3
 import zipfile
 import asyncio
 from typing import List, Optional, Tuple
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from httpx import AsyncClient, ConnectError, HTTPError
@@ -117,6 +118,7 @@ BACKLINKS_FULL_EXPORT_CHARGE_UAH = _parse_float_env(
     0.18
 )
 AUDIT_CHARGE_UAH = _parse_float_env("AUDIT_CHARGE_UAH", 0.60)               # on_page/instant_pages
+SITE_OVERVIEW_CHARGE_UAH = _parse_float_env("SITE_OVERVIEW_CHARGE_UAH", 0.80)  # огляд сайту (relevant_pages + ranked_keywords)
 
 # налаштування експорту
 CSV_MAX = _parse_int_env("CSV_MAX", 1000)
@@ -254,7 +256,7 @@ def services_menu_keyboard() -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton("🔍 SERP"), KeyboardButton("🧠 Keyword Ideas")],
         [KeyboardButton("🌐 Ключі для сайту"), KeyboardButton("⚔️ Gap")],
-        [KeyboardButton("🔗 Backlinks"), KeyboardButton("🛠️ Аудит")],
+        [KeyboardButton("🔗 Backlinks"), KeyboardButton("🛠️ Аудит"), KeyboardButton("📈 Огляд сайту")],
         [KeyboardButton("⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
@@ -419,10 +421,14 @@ def _services_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🔍 Топ-10 Google (SERP)", callback_data="svc|serp")],
         [InlineKeyboardButton("🧠 Ідеї ключових + обсяг/CPC", callback_data="svc|keywords")],
         [InlineKeyboardButton("⚔️ Keyword Gap", callback_data="svc|gap")],
-        [InlineKeyboardButton("🔗 Backlinks огляд", callback_data="svc|backlinks_ov")],
-        [InlineKeyboardButton("🛠️ Аудит URL (On-Page)", callback_data="svc|audit")],
+        [InlineKeyboardButton("📈 Огляд сайту", callback_data="svc|site_overview")],
+        [
+            InlineKeyboardButton("🔗 Backlinks огляд", callback_data="svc|backlinks_ov"),
+            InlineKeyboardButton("🛠️ Аудит URL (On-Page)", callback_data="svc|audit"),
+        ],
         [InlineKeyboardButton("⬅️ Назад", callback_data="services_back")],
     ])
+
 
 
 async def services_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -618,13 +624,14 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cmd = parts[0]
 
     # --- Сервіси (інлайн) ---
-    if cmd == "svc":
+   if cmd == "svc":
         tool = parts[1] if len(parts) > 1 else ""
-        if tool in ("backlinks_ov", "audit"):
+        if tool in ("backlinks_ov", "audit", "site_overview"):
             context.user_data["await_tool"] = tool
             prompts = {
                 "backlinks_ov": "🔗 Backlinks огляд: введіть домен: `mydomain.com`",
                 "audit": "🛠️ Аудит: введіть URL: `https://example.com/page`",
+                "site_overview": "📈 Огляд сайту: `wildfortune.net | country=United States | lang=English | pages=5 | limit=10`",
             }
             text = prompts.get(tool, "Надішліть параметри в одному рядку.")
             return await query.edit_message_text(
@@ -636,8 +643,7 @@ async def on_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             txt = (
                 "Для цього інструменту краще скористайтесь нижніми кнопками меню:\n"
                 "🔍 SERP / 🧠 Keyword Ideas / ⚔️ Gap / 🌐 Ключі для сайту.\n\n"
-                "Або надішліть one-line формат:\n"
-                "`keyword | country=Ukraine | lang=Ukrainian | depth=10`"
+                "Або надішліть параметри в одному рядку через `|`."
             )
             return await query.edit_message_text(txt, parse_mode="Markdown")
 
@@ -1178,7 +1184,7 @@ async def start_site_kw_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["sitekw"] = {}
     context.user_data.pop("await_tool", None)
     await update.message.reply_text(
-        "🌐 Ключі для сайту\n\nВведи домен або URL сайту, напр. `wildfortune.net`:",
+        "🌐 Ключі для сайту\n\nЦей тул виконує автоматичний підбрір ключів для сайта. Якщо треба підібрати семантику, то  введи домен або URL сайту, напр. `google.com`:",
         reply_markup=ReplyKeyboardRemove(),
         parse_mode="Markdown",
     )
@@ -1574,7 +1580,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Швидкий вибір сервісу (reply-кнопки)
-    if text in ("🔍 SERP", "🧠 Keyword Ideas", "🌐 Ключі для сайту", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит"):
+        if text in ("🔍 SERP", "🧠 Keyword Ideas", "🌐 Ключі для сайту", "⚔️ Gap", "🔗 Backlinks", "🛠️ Аудит", "📈 Огляд сайту"):
         if text == "🔍 SERP":
             await _start_serp_flow(update, context)
             return
@@ -1591,6 +1597,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mapping = {
             "🔗 Backlinks": ("backlinks_ov", "Backlinks: `mydomain.com`"),
             "🛠️ Аудит": ("audit", "Audit: `https://example.com/page`"),
+            "📈 Огляд сайту": ("site_overview", "Огляд сайту: `wildfortune.net | country=United States | lang=English | pages=5 | limit=10`"),
         }
         tool, hint = mapping[text]
         context.user_data["await_tool"] = tool
@@ -1600,6 +1607,7 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=services_menu_keyboard()
         )
         return
+
 
     # One-line wizard
     aw = context.user_data.get("await_tool")
@@ -1624,7 +1632,9 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "gap": GAP_CHARGE_UAH,
             "backlinks_ov": BACKLINKS_CHARGE_UAH,
             "audit": AUDIT_CHARGE_UAH,
+            "site_overview": SITE_OVERVIEW_CHARGE_UAH,
         }
+
         need_credits = _uah_to_credits(prices.get(aw, 5.0))
 
         if not charge(uid, need_credits, f"svc:{aw}", main or "-"):
@@ -1806,6 +1816,139 @@ async def on_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_document(
                     document=InputFile(io.BytesIO(csv_bytes), filename="keyword_gap.csv"),
                     caption="CSV з результатами Keyword Gap"
+                )
+                return
+            # --- Site Overview (relevant_pages + ranked_keywords) ---
+            if aw == "site_overview":
+                target = main.strip()
+                if not target:
+                    return await update.message.reply_text(
+                        "Формат: `mydomain.com | country=Ukraine | lang=Ukrainian | pages=5 | limit=10`",
+                        parse_mode="Markdown",
+                    )
+
+                # pages = скільки сторінок взяти з relevant_pages
+                pages_param = opts.get("pages") or "5"
+                try:
+                    pages_limit = int(re.findall(r"\d+", pages_param)[0])
+                except Exception:
+                    pages_limit = 5
+                if pages_limit <= 0:
+                    pages_limit = 5
+
+                # limit з верхньої частини — скільки ключів на сторінку
+                kw_limit = limit if limit > 0 else 10
+
+                # 1) Беремо relevant_pages
+                site_resp = await dfs.relevant_pages(
+                    target,
+                    location_code=location_code,
+                    language_code=language_code,
+                    limit=pages_limit,
+                )
+                site_res = _extract_result(site_resp)
+                pages = site_res.get("items") or []
+
+                if not pages:
+                    bal_now = get_balance(uid)
+                    return await update.message.reply_text(
+                        f"Нічого не знайшов по сайту 😕\nБаланс: {bal_now}",
+                        reply_markup=services_menu_keyboard(),
+                    )
+
+                # 2) Для кожної сторінки беремо ranked_keywords_for_url
+                buf = io.StringIO()
+                w = csv.writer(buf)
+                w.writerow([
+                    "page_url",
+                    "organic_keywords_count",
+                    "organic_etv",
+                    "organic_estimated_paid_traffic_cost",
+                    "keyword",
+                    "search_volume",
+                    "rank",
+                    "etv",
+                ])
+
+                preview_lines = [f"📈 *Огляд сайту* `{target}` ({country_name}, {language_name})\n"]
+                page_idx = 1
+
+                for p in pages[:pages_limit]:
+                    page_url = p.get("page_address") or ""
+                    metrics = (p.get("metrics") or {}).get("organic") or {}
+                    kw_count = metrics.get("count") or 0
+                    etv_val = metrics.get("etv") or 0
+                    paid_cost = metrics.get("estimated_paid_traffic_cost") or 0
+
+                    # relative_url з page_url
+                    rel = urlparse(page_url).path or "/"
+
+                    try:
+                        kw_resp = await dfs.ranked_keywords_for_url(
+                            target,
+                            location_code=location_code,
+                            language_code=language_code,
+                            relative_url=rel,
+                            limit=kw_limit,
+                        )
+                        kw_res = _extract_result(kw_resp)
+                        kw_items = kw_res.get("items") or []
+                    except Exception:
+                        kw_items = []
+
+                    preview_lines.append(
+                        f"{page_idx}. {page_url}\n"
+                        f"   keywords: {kw_count}, ETV: {etv_val:.2f}, paid_est: {paid_cost:.2f}"
+                    )
+
+                    # топ-3 в прев’ю
+                    for kw_item in kw_items[:3]:
+                        kd = kw_item.get("keyword_data") or {}
+                        ki = kd.get("keyword_info") or {}
+                        se = (kw_item.get("ranked_serp_element") or {}).get("serp_item") or {}
+
+                        kw_str = kd.get("keyword") or "—"
+                        sv = ki.get("search_volume") or 0
+                        rank = se.get("rank_group") or se.get("rank_absolute") or "-"
+                        kw_etv = se.get("etv") or 0
+                        preview_lines.append(f"      • {kw_str} — vol:{sv}, pos:{rank}, etv:{kw_etv:.2f}")
+
+                    # в CSV — всі ключі, що прийшли
+                    for kw_item in kw_items:
+                        kd = kw_item.get("keyword_data") or {}
+                        ki = kd.get("keyword_info") or {}
+                        se = (kw_item.get("ranked_serp_element") or {}).get("serp_item") or {}
+
+                        kw_str = kd.get("keyword") or ""
+                        sv = ki.get("search_volume") or ""
+                        rank = se.get("rank_group") or se.get("rank_absolute") or ""
+                        kw_etv = se.get("etv") or ""
+                        w.writerow([
+                            page_url,
+                            kw_count,
+                            etv_val,
+                            paid_cost,
+                            kw_str,
+                            sv,
+                            rank,
+                            kw_etv,
+                        ])
+
+                    preview_lines.append("")  # порожній рядок між сторінками
+                    page_idx += 1
+
+                csv_bytes = buf.getvalue().encode()
+                bal_now = get_balance(uid)
+
+                preview_text = "\n".join(preview_lines) + f"\n💰 Списано {need_credits}. Баланс: {bal_now}"
+                await update.message.reply_text(
+                    preview_text,
+                    parse_mode="Markdown",
+                    reply_markup=services_menu_keyboard(),
+                )
+                await update.message.reply_document(
+                    document=InputFile(io.BytesIO(csv_bytes), filename=f"{target}_overview.csv"),
+                    caption="CSV: сторінки сайту + ключі, по яких вони ранжуються"
                 )
                 return
 

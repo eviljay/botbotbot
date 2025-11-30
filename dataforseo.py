@@ -183,6 +183,57 @@ class DataForSEO:
             "language_code": language_code,
         }
         return await self._post("/v3/dataforseo_labs/google/keyword_difficulty/live", [task])
+    # ========= LABS: RELEVANT PAGES + RANKED KEYWORDS =========
+
+    async def relevant_pages(
+        self,
+        target: str,
+        location_code: int,
+        language_code: str,
+        limit: int = 100,
+        include_clickstream_data: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        /v3/dataforseo_labs/google/relevant_pages/live
+
+        Повертає список найважливіших сторінок сайту з aggregated метриками.
+        """
+        task = {
+            "target": target,
+            "location_code": location_code,
+            "language_code": language_code,
+            "limit": limit,
+            "historical_serp_mode": "live",
+            "ignore_synonyms": False,
+            "include_clickstream_data": include_clickstream_data,
+        }
+        return await self._post("/v3/dataforseo_labs/google/relevant_pages/live", [task])
+
+    async def ranked_keywords_for_url(
+        self,
+        target: str,
+        location_code: int,
+        language_code: str,
+        relative_url: str,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """
+        /v3/dataforseo_labs/google/ranked_keywords/live
+
+        Витягує ключі, які ранжуються саме для вказаного relative_url.
+        """
+        task = {
+            "target": target,
+            "location_code": location_code,
+            "language_code": language_code,
+            "limit": limit,
+            "filters": [
+                "ranked_serp_element.serp_item.relative_url",
+                "=",
+                relative_url,
+            ],
+        }
+        return await self._post("/v3/dataforseo_labs/google/ranked_keywords/live", [task])
 
     # ========= KEYWORD GAP (Labs: domain_intersection) =========
 
