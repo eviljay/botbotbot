@@ -26,17 +26,27 @@ class DataForSEO:
     async def _post(self, path: str, payload: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Базовий POST-запит. Повертає сирий JSON від DataForSEO.
-        НІЧОГО не парсимо тут — тільки HTTP і JSON.
-        Кидає DataForSEOError при HTTP- або JSON-помилках.
         """
         url = f"{self.base_url}{path}"
+
+        # 🔍 Тимчасовий дебаг — можна потім прибрати або замінити на logging
+        print(f"[DataForSEO] POST {url}")
+        print(f"[DataForSEO] Payload: {payload}")
+
         async with AsyncClient(timeout=60) as client:
             resp = await client.post(url, headers=self._headers, json=payload)
+
+        # ще трішки дебагу
+        print(f"[DataForSEO] Status: {resp.status_code}")
+        try:
+            debug_json = resp.json()
+        except Exception:
+            debug_json = resp.text
+        print(f"[DataForSEO] Response body: {debug_json}")
 
         try:
             resp.raise_for_status()
         except HTTPStatusError as e:
-            # пробуємо витягнути тіло помилки
             try:
                 data = resp.json()
             except Exception:
@@ -237,9 +247,7 @@ class DataForSEO:
 
     # ========= KEYWORD GAP (Labs: domain_intersection) =========
 
-    
-
-# ========= KEYWORD GAP (Labs: domain_intersection) =========
+    # ========= KEYWORD GAP (Labs: domain_intersection) =========
     async def keywords_gap(
         self,
         target: str,
@@ -254,36 +262,35 @@ class DataForSEO:
         target  — наш сайт (наприклад, "fotoklok.se")
         competitors — список доменів-конкурентів (до 3 шт.)
 
-        Ідея:
-        - викликаємо domain_intersection з target1 = наш сайт
-          та target2..4 = конкуренти
-        - просимо include_serp_info = True
-        - далі у build_keyword_gap_message фільтруємо ключі, де
-          target1 не ранжується, а хоч один конкурент ранжується.
+        Логіка:
+        для КОЖНОГО конкурента окремий task:
+          target1 = конкурент
+          target2 = наш домен
+          intersections = false (ключі, де конкурент ранжується, а ми — ні)
         """
 
-        comps = competitors[:3]
+        if not competitors:
+            raise DataForSEOError("Для keyword gap потрібен хоча б один конкурент")
 
-        task: Dict[str, Any] = {
-            "se_type": "google",
-            "target1": target,
-            "location_code": location_code,
-            "language_code": language_code,
-            "include_serp_info": True,
-            "limit": limit,
-        }
+        tasks: List[Dict[str, Any]] = []
+        for comp in competitors[:3]:
+            task = {
+                "target1": comp,
+                "target2": target,
+                "location_code": location_code,
+                "language_code": language_code,
+                "intersections": False,
+                "include_serp_info": True,
+                "limit": limit,
+            }
+            tasks.append(task)
 
-        # додаємо конкурентів як target2..4
-        for i, comp in enumerate(comps):
-            task[f"target{i + 2}"] = comp
-
-        # важливо: НЕ пхаємо сюди include_subdomains, search_partners і т.п.
-        # бо для domain_intersection вони не потрібні і можуть вилазити як unknown fields
-
+        # НІЯКИХ api/function тут не має бути
         return await self._post(
             "/v3/dataforseo_labs/google/domain_intersection/live",
-            [task],
+            tasks,
         )
+
 
     # ========= BACKLINKS =========
 
