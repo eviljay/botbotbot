@@ -67,7 +67,7 @@ class DataForSEO:
             "se_domain": "google.com",
             "depth": depth,
         }
-        return await self._post("/v3/serp/google/organic/live", [task])
+        return await self._post("/v3/serp/google/organic/live/advanced", [task])
 
     async def suggest_landing_url(
         self,
@@ -91,7 +91,7 @@ class DataForSEO:
             "se_domain": "google.com",
             "depth": depth,
         }
-        resp = await self._post("/v3/serp/google/organic/live", [task])
+        resp = await self._post("/v3/serp/google/organic/live/advanced", [task])
 
         tasks = resp.get("tasks") or []
         if not tasks:
