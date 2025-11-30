@@ -1048,7 +1048,7 @@ async def _handle_serp_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             "Глибина SERP: обери 10, 20 або 30 або 100.",
             reply_markup=ReplyKeyboardMarkup(
                 [[KeyboardButton("10"), KeyboardButton("20"), KeyboardButton("30"), KeyboardButton("100")]],
-                resize_keyboard=True,kb
+                resize_keyboard=True,kb,
             ),
         )
         return
